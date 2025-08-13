@@ -3,19 +3,16 @@ import requests
 import msal
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-import webbrowser
-import urllib.parse
 
 class OutlookManager:
     def __init__(self):
         self.client_id = st.secrets["microsoft"]["client_id"]
-        self.client_secret = st.secrets["microsoft"]["client_secret"]
+        # Note: No client_secret needed for PublicClientApplication
         self.tenant_id = st.secrets["microsoft"]["tenant_id"]
-        self.redirect_uri = "http://localhost:8501"
         
         # Microsoft Graph API endpoints
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
-        # FIXED: Use delegated permissions for user email access
+        # Use delegated permissions for user email access
         self.scope = [
             "https://graph.microsoft.com/Mail.Read",
             "https://graph.microsoft.com/User.Read"
@@ -26,13 +23,12 @@ class OutlookManager:
         self.app = None
     
     def authenticate(self) -> bool:
-        """Authenticate with Microsoft Graph API using Authorization Code Flow"""
+        """Authenticate with Microsoft Graph API using Device Code Flow"""
         try:
-            # Create MSAL app for authorization code flow
-            self.app = msal.ConfidentialClientApplication(
+            # Create MSAL app for device code flow - use PublicClientApplication
+            self.app = msal.PublicClientApplication(
                 self.client_id,
-                authority=self.authority,
-                client_credential=self.client_secret
+                authority=self.authority
             )
             
             # Try to get token from cache first
@@ -43,14 +39,14 @@ class OutlookManager:
                     self.access_token = result["access_token"]
                     return True
             
-            # If no cached token, use device code flow for easier authentication
+            # If no cached token, use device code flow
             flow = self.app.initiate_device_flow(scopes=self.scope)
             
             if "user_code" not in flow:
-                raise ValueError("Fail to create device flow. Err: %s" % json.dumps(flow, indent=4))
+                raise ValueError("Failed to create device flow. Error: %s" % str(flow))
             
             # Display the device code to user
-            st.info(f"**Authentication Required**")
+            st.info("**Authentication Required**")
             st.markdown(f"1. Go to: **{flow['verification_uri']}**")
             st.markdown(f"2. Enter this code: **{flow['user_code']}**")
             st.markdown("3. Complete the sign-in process in your browser")
