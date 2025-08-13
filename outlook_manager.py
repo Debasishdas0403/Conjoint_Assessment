@@ -3,37 +3,84 @@ import requests
 import msal
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+import webbrowser
+import urllib.parse
 
 class OutlookManager:
     def __init__(self):
         self.client_id = st.secrets["microsoft"]["client_id"]
         self.client_secret = st.secrets["microsoft"]["client_secret"]
         self.tenant_id = st.secrets["microsoft"]["tenant_id"]
+        self.redirect_uri = "http://localhost:8501"
         
         # Microsoft Graph API endpoints
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
-        # FIXED: Changed scope to use .default format for client credentials flow
-        self.scope = ["https://graph.microsoft.com/.default"]
+        # FIXED: Use delegated permissions for user email access
+        self.scope = [
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/User.Read"
+        ]
         self.graph_url = "https://graph.microsoft.com/v1.0"
         
         self.access_token = None
         self.app = None
     
     def authenticate(self) -> bool:
-        """Authenticate with Microsoft Graph API using Client Credentials Flow"""
+        """Authenticate with Microsoft Graph API using Authorization Code Flow"""
         try:
-            # Create MSAL app for client credentials flow
+            # Create MSAL app for authorization code flow
             self.app = msal.ConfidentialClientApplication(
                 self.client_id,
                 authority=self.authority,
                 client_credential=self.client_secret
             )
             
-            # Use acquire_token_for_client for client credentials flow
-            result = self.app.acquire_token_for_client(scopes=self.scope)
+            # Try to get token from cache first
+            accounts = self.app.get_accounts()
+            if accounts:
+                result = self.app.acquire_token_silent(self.scope, account=accounts[0])
+                if result and "access_token" in result:
+                    self.access_token = result["access_token"]
+                    return True
+            
+            # If no cached token, use device code flow for easier authentication
+            flow = self.app.initiate_device_flow(scopes=self.scope)
+            
+            if "user_code" not in flow:
+                raise ValueError("Fail to create device flow. Err: %s" % json.dumps(flow, indent=4))
+            
+            # Display the device code to user
+            st.info(f"**Authentication Required**")
+            st.markdown(f"1. Go to: **{flow['verification_uri']}**")
+            st.markdown(f"2. Enter this code: **{flow['user_code']}**")
+            st.markdown("3. Complete the sign-in process in your browser")
+            st.markdown("4. Click 'Complete Authentication' button below after signing in")
+            
+            # Store flow in session state for completion
+            st.session_state.auth_flow = flow
+            
+            return False  # Return False to show completion button
+            
+        except Exception as e:
+            st.error(f"Authentication error: {str(e)}")
+            return False
+    
+    def complete_authentication(self) -> bool:
+        """Complete the device flow authentication"""
+        try:
+            if 'auth_flow' not in st.session_state:
+                st.error("No authentication flow found. Please start authentication again.")
+                return False
+            
+            flow = st.session_state.auth_flow
+            
+            # Complete the device flow
+            result = self.app.acquire_token_by_device_flow(flow)
             
             if "access_token" in result:
                 self.access_token = result["access_token"]
+                # Clear the auth flow from session state
+                del st.session_state.auth_flow
                 return True
             else:
                 error_msg = result.get('error_description', 'Unknown error')
@@ -41,7 +88,7 @@ class OutlookManager:
                 return False
                 
         except Exception as e:
-            st.error(f"Authentication error: {str(e)}")
+            st.error(f"Authentication completion error: {str(e)}")
             return False
     
     def is_token_valid(self) -> bool:
@@ -66,7 +113,15 @@ class OutlookManager:
     def refresh_token_if_needed(self) -> bool:
         """Refresh token if it's expired"""
         if not self.is_token_valid():
-            return self.authenticate()
+            # Try to get a new token silently
+            if self.app:
+                accounts = self.app.get_accounts()
+                if accounts:
+                    result = self.app.acquire_token_silent(self.scope, account=accounts[0])
+                    if result and "access_token" in result:
+                        self.access_token = result["access_token"]
+                        return True
+            return False
         return True
     
     def get_unread_emails(self, start_date: datetime.date, end_date: datetime.date) -> List[Dict]:
