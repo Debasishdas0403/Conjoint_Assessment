@@ -44,7 +44,31 @@ class OutlookManager:
             st.error(f"Authentication error: {str(e)}")
             return False
     
-    # Rest of your methods remain the same...
+    def is_token_valid(self) -> bool:
+        """Check if the current access token is valid"""
+        if not self.access_token:
+            return False
+        
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Test the token with a simple API call
+            url = f"{self.graph_url}/me"
+            response = requests.get(url, headers=headers)
+            return response.status_code == 200
+            
+        except Exception:
+            return False
+
+    def refresh_token_if_needed(self) -> bool:
+        """Refresh token if it's expired"""
+        if not self.is_token_valid():
+            return self.authenticate()
+        return True
+    
     def get_unread_emails(self, start_date: datetime.date, end_date: datetime.date) -> List[Dict]:
         """Fetch unread emails from Outlook for specified date range"""
         if not self.access_token:
