@@ -29,13 +29,30 @@ def main():
             if st.button("Login to Outlook", type="primary"):
                 try:
                     outlook_manager = OutlookManager()
-                    if outlook_manager.authenticate():
+                    result = outlook_manager.authenticate()
+                    if result:
                         st.session_state.authenticated = True
-                        st.session_state.outlook_manager = outlook_manager  # Store in session state
+                        st.session_state.outlook_manager = outlook_manager
                         st.success("Successfully authenticated!")
                         st.rerun()
+                    else:
+                        st.session_state.outlook_manager = outlook_manager
+                        # Authentication started, waiting for completion
                 except Exception as e:
                     st.error(f"Authentication failed: {str(e)}")
+            
+            # Show completion button if auth flow is in progress
+            if 'auth_flow' in st.session_state and 'outlook_manager' in st.session_state:
+                if st.button("Complete Authentication", type="secondary"):
+                    try:
+                        outlook_manager = st.session_state.outlook_manager
+                        if outlook_manager.complete_authentication():
+                            st.session_state.authenticated = True
+                            st.success("Successfully authenticated!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Authentication completion failed: {str(e)}")
+        
         else:
             st.success("✅ Authenticated")
             # Show token status
@@ -48,7 +65,9 @@ def main():
                 st.session_state.authenticated = False
                 st.session_state.processed_emails = []
                 if 'outlook_manager' in st.session_state:
-                    del st.session_state.outlook_manager  # Clean up session state
+                    del st.session_state.outlook_manager
+                if 'auth_flow' in st.session_state:
+                    del st.session_state.auth_flow
                 st.rerun()
     
     if st.session_state.authenticated:
