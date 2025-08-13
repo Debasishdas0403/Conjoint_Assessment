@@ -9,55 +9,42 @@ class OutlookManager:
         self.client_id = st.secrets["microsoft"]["client_id"]
         self.client_secret = st.secrets["microsoft"]["client_secret"]
         self.tenant_id = st.secrets["microsoft"]["tenant_id"]
-        self.redirect_uri = st.secrets["microsoft"]["redirect_uri"]
         
-        # Microsoft Graph API endpoints[1][2]
+        # Microsoft Graph API endpoints
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
-        self.scope = ["https://graph.microsoft.com/Mail.Read"]
+        # FIXED: Changed scope to use .default format for client credentials flow
+        self.scope = ["https://graph.microsoft.com/.default"]
         self.graph_url = "https://graph.microsoft.com/v1.0"
         
         self.access_token = None
         self.app = None
     
     def authenticate(self) -> bool:
-        """Authenticate with Microsoft Graph API"""
+        """Authenticate with Microsoft Graph API using Client Credentials Flow"""
         try:
-            # Create MSAL app[12]
+            # Create MSAL app for client credentials flow
             self.app = msal.ConfidentialClientApplication(
                 self.client_id,
                 authority=self.authority,
                 client_credential=self.client_secret
             )
             
-            # Try to get token from cache first
-            accounts = self.app.get_accounts()
-            if accounts:
-                result = self.app.acquire_token_silent(self.scope, account=accounts[0])
-                if result and "access_token" in result:
-                    self.access_token = result["access_token"]
-                    return True
-            
-            # If no cached token, get authorization URL
-            auth_url = self.app.get_authorization_request_url(
-                self.scope,
-                redirect_uri=self.redirect_uri
-            )
-            
-            # For production, you would redirect user to auth_url
-            # For this example, we'll use device code flow
+            # Use acquire_token_for_client for client credentials flow
             result = self.app.acquire_token_for_client(scopes=self.scope)
             
             if "access_token" in result:
                 self.access_token = result["access_token"]
                 return True
             else:
-                st.error(f"Authentication failed: {result.get('error_description', 'Unknown error')}")
+                error_msg = result.get('error_description', 'Unknown error')
+                st.error(f"Authentication failed: {error_msg}")
                 return False
                 
         except Exception as e:
             st.error(f"Authentication error: {str(e)}")
             return False
     
+    # Rest of your methods remain the same...
     def get_unread_emails(self, start_date: datetime.date, end_date: datetime.date) -> List[Dict]:
         """Fetch unread emails from Outlook for specified date range"""
         if not self.access_token:
@@ -73,7 +60,7 @@ class OutlookManager:
             start_datetime = datetime.combine(start_date, datetime.min.time()).isoformat() + 'Z'
             end_datetime = datetime.combine(end_date, datetime.max.time()).isoformat() + 'Z'
             
-            # Build filter query for unread emails in date range[1][3]
+            # Build filter query for unread emails in date range
             filter_query = f"isRead eq false and receivedDateTime ge {start_datetime} and receivedDateTime le {end_datetime}"
             
             # API endpoint with filter
