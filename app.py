@@ -31,16 +31,24 @@ def main():
                     outlook_manager = OutlookManager()
                     if outlook_manager.authenticate():
                         st.session_state.authenticated = True
-                        st.session_state.outlook_manager = outlook_manager
+                        st.session_state.outlook_manager = outlook_manager  # Store in session state
                         st.success("Successfully authenticated!")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Authentication failed: {str(e)}")
         else:
             st.success("✅ Authenticated")
+            # Show token status
+            if 'outlook_manager' in st.session_state and st.session_state.outlook_manager.access_token:
+                st.info("🔑 Access token valid")
+            else:
+                st.warning("⚠️ Access token missing - please re-authenticate")
+            
             if st.button("Logout"):
                 st.session_state.authenticated = False
                 st.session_state.processed_emails = []
+                if 'outlook_manager' in st.session_state:
+                    del st.session_state.outlook_manager  # Clean up session state
                 st.rerun()
     
     if st.session_state.authenticated:
@@ -118,10 +126,23 @@ def process_emails(start_date, end_date):
     
     with st.spinner("Fetching unread emails..."):
         try:
+            # Check authentication
+            if 'outlook_manager' not in st.session_state:
+                st.error("Not authenticated. Please login first.")
+                return
+            
             outlook_manager = st.session_state.outlook_manager
+            
+            # Refresh token if needed
+            if not outlook_manager.refresh_token_if_needed():
+                st.error("Authentication expired. Please login again.")
+                st.session_state.authenticated = False
+                st.rerun()
+                return
+            
             ai_processor = AIProcessor()
             
-            # Get unread emails from Outlook[3][4]
+            # Get unread emails from Outlook
             unread_emails = outlook_manager.get_unread_emails(start_date, end_date)
             
             if not unread_emails:
@@ -137,7 +158,7 @@ def process_emails(start_date, end_date):
             for i, email in enumerate(unread_emails):
                 status_text.text(f"Processing email {i+1} of {len(unread_emails)}")
                 
-                # Process email with AI[7][10]
+                # Process email with AI
                 email_analysis = ai_processor.analyze_email(email)
                 
                 processed_email = {
@@ -160,6 +181,11 @@ def process_emails(start_date, end_date):
             
         except Exception as e:
             st.error(f"Error processing emails: {str(e)}")
+            # If it's an authentication error, reset the session
+            if "InvalidAuthenticationToken" in str(e) or "Access token" in str(e):
+                st.session_state.authenticated = False
+                st.error("Authentication expired. Please login again.")
+                st.rerun()
         finally:
             progress_bar.empty()
             status_text.empty()
