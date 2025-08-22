@@ -24,11 +24,29 @@ This tool helps you design and analyze conjoint choice experiments for demand es
 It calculates D-efficiency and provides GPT-powered recommendations for optimal survey design.
 """)
 
+# Initialize OpenAI client from secrets
+def get_openai_client():
+    """Get OpenAI client using secrets"""
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+        return openai.OpenAI(api_key=api_key)
+    except KeyError:
+        return None
+    except Exception as e:
+        st.error(f"Error initializing OpenAI client: {str(e)}")
+        return None
+
+# Check if OpenAI is available
+openai_available = get_openai_client() is not None
+
 # Sidebar for inputs
 st.sidebar.header("📋 Survey Design Parameters")
 
-# OpenAI API key input
-openai_api_key = st.sidebar.text_input("OpenAI API Key (optional for GPT recommendations)", type="password")
+# Show OpenAI status in sidebar
+if openai_available:
+    st.sidebar.success("🤖 GPT Recommendations: Available")
+else:
+    st.sidebar.warning("🤖 GPT Recommendations: Unavailable (API key not configured)")
 
 class ConjointAnalyzer:
     def __init__(self):
@@ -249,47 +267,48 @@ if 'results' in st.session_state:
     with tab4:
         st.subheader("🤖 GPT-Powered Recommendations")
         
-        if openai_api_key:
+        if openai_available:
             if st.button("Generate GPT Recommendations"):
-                try:
-                    client = openai.OpenAI(api_key=openai_api_key)
-                    
-                    # Prepare context for GPT
-                    context = f"""
-                    Conjoint Analysis Results Summary:
-                    - Total Attributes: {len(st.session_state.attributes)}
-                    - Attributes: {list(st.session_state.attributes.keys())}
-                    - Total Profiles: {len(profiles_df)}
-                    - Parameters to Estimate: {st.session_state.num_params}
-                    - Respondents: {n_respondents}
-                    - Target D-Efficiency: {target_efficiency}
-                    - Maximum Achieved D-Efficiency: {max_efficiency:.4f}
-                    - Optimal Questions: {min_questions if min_questions != "N/A" else "Could not achieve target"}
-                    
-                    Please provide recommendations for this conjoint study design including:
-                    1. Survey design optimization
-                    2. Sample size recommendations
-                    3. Potential challenges and solutions
-                    4. Implementation best practices
-                    """
-                    
-                    response = client.chat.completions.create(
-                        model="gpt-4",
-                        messages=[
-                            {"role": "system", "content": "You are a market research expert specializing in conjoint analysis and survey design."},
-                            {"role": "user", "content": context}
-                        ],
-                        max_tokens=1500,
-                        temperature=0.7
-                    )
-                    
-                    st.success("GPT Recommendations Generated!")
-                    st.markdown(response.choices[0].message.content)
-                    
-                except Exception as e:
-                    st.error(f"Error generating GPT recommendations: {str(e)}")
+                with st.spinner("Generating AI recommendations..."):
+                    try:
+                        client = get_openai_client()
+                        
+                        # Prepare context for GPT
+                        context = f"""
+                        Conjoint Analysis Results Summary:
+                        - Total Attributes: {len(st.session_state.attributes)}
+                        - Attributes: {list(st.session_state.attributes.keys())}
+                        - Total Profiles: {len(profiles_df)}
+                        - Parameters to Estimate: {st.session_state.num_params}
+                        - Respondents: {n_respondents}
+                        - Target D-Efficiency: {target_efficiency}
+                        - Maximum Achieved D-Efficiency: {max_efficiency:.4f}
+                        - Optimal Questions: {min_questions if min_questions != "N/A" else "Could not achieve target"}
+                        
+                        Please provide recommendations for this conjoint study design including:
+                        1. Survey design optimization
+                        2. Sample size recommendations
+                        3. Potential challenges and solutions
+                        4. Implementation best practices
+                        """
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-4",
+                            messages=[
+                                {"role": "system", "content": "You are a market research expert specializing in conjoint analysis and survey design."},
+                                {"role": "user", "content": context}
+                            ],
+                            max_tokens=1500,
+                            temperature=0.7
+                        )
+                        
+                        st.success("GPT Recommendations Generated!")
+                        st.markdown(response.choices[0].message.content)
+                        
+                    except Exception as e:
+                        st.error(f"Error generating GPT recommendations: {str(e)}")
         else:
-            st.info("Enter your OpenAI API key in the sidebar to get GPT-powered recommendations.")
+            st.info("🔑 OpenAI API key not configured in secrets. Contact administrator to enable GPT recommendations.")
             
             # Provide basic recommendations
             st.markdown("""
