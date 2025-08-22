@@ -265,7 +265,7 @@ if st.button("🚀 Run Conjoint Analysis", type="primary"):
             profiles_df = analyzer.generate_profiles(attribute_levels)
             
             # Calculate optimal questions with dynamic range
-            results_df, recommended_min, max_questions_tested = analyzer.find_optimal_questions(
+            results_df, theoretical_min, max_questions_tested = analyzer.find_optimal_questions(
                 n_respondents=n_respondents,
                 target_efficiency=target_efficiency
             )
@@ -275,7 +275,7 @@ if st.button("🚀 Run Conjoint Analysis", type="primary"):
             st.session_state.results = results_df
             st.session_state.attribute_levels = attribute_levels
             st.session_state.num_params = analyzer.num_params
-            st.session_state.recommended_min = recommended_min
+            st.session_state.theoretical_min = theoretical_min
             st.session_state.max_questions_tested = max_questions_tested
     else:
         st.error("Please ensure all attributes have at least 2 levels.")
@@ -284,10 +284,10 @@ if st.button("🚀 Run Conjoint Analysis", type="primary"):
 if 'results' in st.session_state:
     results_df = st.session_state.results
     profiles_df = st.session_state.profiles
-    recommended_min = st.session_state.recommended_min
+    theoretical_min = st.session_state.theoretical_min
     max_questions_tested = st.session_state.max_questions_tested
     
-    # Main results
+    # Main results with clear distinction
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -298,16 +298,31 @@ if 'results' in st.session_state:
     
     with col3:
         optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
-        min_questions = optimal_questions['num_questions'].min() if len(optimal_questions) > 0 else "N/A"
-        st.metric("Minimum Questions", min_questions)
+        optimal_min_questions = optimal_questions['num_questions'].min() if len(optimal_questions) > 0 else "N/A"
+        st.metric(
+            "📊 Optimal Questions", 
+            optimal_min_questions,
+            help=f"Minimum questions needed to achieve {target_efficiency} D-efficiency (based on actual analysis results)"
+        )
     
     with col4:
         max_efficiency = results_df['d_efficiency'].max()
         st.metric("Maximum D-Efficiency", f"{max_efficiency:.4f}")
     
+    # Clear explanation of the two different recommendations
+    st.info f"""
+    🔍 **Understanding the Two Recommendations:**
+    
+    • **Optimal Questions ({optimal_min_questions})**: This is your **actual result** - the minimum questions needed to achieve your target D-efficiency of {target_efficiency}
+    
+    • **Theoretical Baseline ({theoretical_min})**: This is a **statistical rule of thumb** (Parameters + 2 = {st.session_state.num_params} + 2) shown as the blue line in the chart
+    
+    **→ Use the Optimal Questions ({optimal_min_questions}) for your survey design!**
+    """)
+    
     # Show study design summary
     attribute_summary = ", ".join([f"{i+1}({levels})" for i, levels in enumerate(st.session_state.attribute_levels)])
-    st.info(f"🎯 **Study Design:** {len(st.session_state.attribute_levels)} attributes with levels: {attribute_summary} | Testing 1 to {max_questions_tested} questions")
+    st.success(f"🎯 **Study Design:** {len(st.session_state.attribute_levels)} attributes with levels: {attribute_summary} | Testing 1 to {max_questions_tested} questions")
     
     # Tabs for detailed results
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Efficiency Curve", "📋 Detailed Results", "🎯 Product Profiles", "🤖 GPT Recommendations"])
@@ -333,13 +348,22 @@ if 'results' in st.session_state:
             annotation_text=f"Target Efficiency ({target_efficiency})"
         )
         
-        # Add recommended minimum line
+        # Add theoretical minimum line with clear label
         fig.add_vline(
-            x=recommended_min,
+            x=theoretical_min,
             line_dash="dot",
             line_color="blue",
-            annotation_text=f"Recommended Min ({recommended_min})"
+            annotation_text=f"Theoretical Baseline ({theoretical_min})"
         )
+        
+        # Highlight optimal point if found
+        if optimal_min_questions != "N/A":
+            fig.add_vline(
+                x=optimal_min_questions,
+                line_dash="solid",
+                line_color="green",
+                annotation_text=f"Optimal Result ({optimal_min_questions})"
+            )
         
         fig.update_layout(
             title="Conjoint Design Efficiency Analysis",
@@ -357,27 +381,43 @@ if 'results' in st.session_state:
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Additional insights
-        st.markdown("**📋 Chart Insights:**")
+        # Enhanced chart insights with clear distinction
+        st.markdown("**📋 Chart Legend & Insights:**")
         col_a, col_b = st.columns(2)
         with col_a:
-            st.markdown(f"• **Red dashed line:** Target D-efficiency ({target_efficiency})")
-            st.markdown(f"• **Blue dotted line:** Recommended minimum ({recommended_min} questions)")
+            st.markdown(f"🔴 **Red dashed line:** Your target D-efficiency ({target_efficiency})")
+            st.markdown(f"🔵 **Blue dotted line:** Theoretical baseline ({theoretical_min} questions)")
+            if optimal_min_questions != "N/A":
+                st.markdown(f"🟢 **Green solid line:** Your optimal result ({optimal_min_questions} questions)")
         with col_b:
-            if min_questions != "N/A":
-                st.markdown(f"• **Optimal point:** {min_questions} questions achieves target")
-            st.markdown(f"• **Range tested:** 1 to {max_questions_tested} questions")
+            st.markdown("**Key Differences:**")
+            st.markdown(f"• **Theoretical baseline:** Rule of thumb (Parameters + 2)")
+            st.markdown(f"• **Optimal result:** Actual minimum for your target")
+            if optimal_min_questions != "N/A":
+                if optimal_min_questions < theoretical_min:
+                    st.markdown(f"• **Good news:** You need fewer questions than expected!")
+                elif optimal_min_questions > theoretical_min:
+                    st.markdown(f"• **Note:** You need more questions than the rule suggests")
+                else:
+                    st.markdown(f"• **Perfect:** Results match the theoretical baseline")
     
     with tab2:
         st.subheader("Detailed Efficiency Results")
         
-        # Add observations per parameter column
+        # Enhanced table with clear indicators
         results_display = results_df.copy()
         results_display['obs_per_param'] = (results_display['num_questions'] * n_respondents) / st.session_state.num_params
         results_display['obs_per_param'] = results_display['obs_per_param'].round(2)
         
+        # Add status indicators
+        results_display['status'] = ''
+        if optimal_min_questions != "N/A":
+            results_display.loc[results_display['num_questions'] == optimal_min_questions, 'status'] = '🎯 OPTIMAL'
+        results_display.loc[results_display['num_questions'] == theoretical_min, 'status'] = '📏 THEORETICAL'
+        results_display.loc[results_display['d_efficiency'] >= target_efficiency, 'status'] = results_display.loc[results_display['d_efficiency'] >= target_efficiency, 'status'] + ' ✅'
+        
         # Reorder columns
-        results_display = results_display[['num_questions', 'obs_per_param', 'd_efficiency', 'd_error']]
+        results_display = results_display[['num_questions', 'status', 'obs_per_param', 'd_efficiency', 'd_error']]
         
         # Highlight optimal rows
         optimal_mask = results_display['d_efficiency'] >= target_efficiency
@@ -389,6 +429,14 @@ if 'results' in st.session_state:
             ),
             use_container_width=True
         )
+        
+        # Clear explanation below table
+        st.markdown(f"""
+        **🏷️ Status Indicators:**
+        - **🎯 OPTIMAL**: Your actual optimal choice ({optimal_min_questions} questions)
+        - **📏 THEORETICAL**: Statistical baseline ({theoretical_min} questions) 
+        - **✅**: Meets your target D-efficiency of {target_efficiency}
+        """)
         
         # Download button for results
         csv = results_display.to_csv(index=False)
@@ -438,9 +486,9 @@ if 'results' in st.session_state:
                         - Respondents: {n_respondents}
                         - Target D-Efficiency: {target_efficiency}
                         - Maximum Achieved D-Efficiency: {max_efficiency:.4f}
-                        - Recommended Minimum Questions: {recommended_min}
+                        - Theoretical Baseline (Rule of Thumb): {theoretical_min} questions
+                        - Optimal Questions (Actual Result): {optimal_min_questions if optimal_min_questions != "N/A" else "Could not achieve target"}
                         - Range Tested: 1 to {max_questions_tested} questions
-                        - Optimal Questions: {min_questions if min_questions != "N/A" else "Could not achieve target"}
                         
                         Please provide recommendations for this conjoint study design.
                         """
@@ -463,10 +511,10 @@ if 'results' in st.session_state:
         else:
             st.info("🔑 OpenAI API key not configured in secrets. Contact administrator to enable GPT recommendations.")
 
-# Summary section
+# Enhanced Summary section with clear distinction
 if 'results' in st.session_state:
     st.markdown("---")
-    st.subheader("📊 Summary")
+    st.subheader("📊 Final Recommendation")
     
     optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
     
@@ -476,18 +524,24 @@ if 'results' in st.session_state:
         obs_per_param_at_min = (min_q * n_respondents) / st.session_state.num_params
         
         st.success(f"""
-        **Optimal Design Found!**
-        - Minimum questions per respondent: **{min_q}**
-        - D-efficiency at minimum: **{eff_at_min:.4f}**
+        **🎯 USE THIS FOR YOUR SURVEY DESIGN:**
+        - **Optimal questions per respondent: {min_q}**
+        - D-efficiency achieved: **{eff_at_min:.4f}**
         - Observations per parameter: **{obs_per_param_at_min:.1f}**
-        - This design meets your target efficiency of {target_efficiency}
+        - This meets your target efficiency of {target_efficiency}
+        
+        **📊 Comparison:**
+        - Theoretical baseline was: **{theoretical_min}** questions
+        - Your actual optimal: **{min_q}** questions
+        - Difference: **{min_q - theoretical_min:+d}** questions
         """)
     else:
         st.warning(f"""
-        **Target efficiency not achieved in tested range**
+        **⚠️ Target efficiency not achieved in tested range**
         - Consider increasing the number of questions beyond {max_questions_tested}
         - Or reducing the target D-efficiency threshold
         - Maximum achieved efficiency: **{max_efficiency:.4f}**
+        - Theoretical baseline: **{theoretical_min}** questions
         """)
 
 # Footer
