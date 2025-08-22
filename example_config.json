@@ -1,0 +1,17 @@
+{
+  "attributes": {
+    "Price": ["$1.99", "$2.99", "$3.99", "$4.99"],
+    "Brand": ["Brand A", "Brand B", "Brand C"],
+    "Size": ["Small", "Medium", "Large"],
+    "Color": ["Red", "Blue", "Green"],
+    "Material": ["Plastic", "Metal", "Wood"]
+  },
+  "parameters": {
+    "n_respondents": 60,
+    "n_alternatives": 2,
+    "target_efficiency": 0.8
+  },
+  "description": "Example conjoint design for product testing with 5 attributes",
+  "created_date": "2025-01-01",
+  "notes": "This is a sample configuration that can be imported into the tool"
+}
