@@ -7,6 +7,7 @@ from itertools import product
 import openai
 from scipy.optimize import minimize
 import warnings
+import math
 warnings.filterwarnings('ignore')
 
 # Set page config
@@ -68,6 +69,9 @@ class ConjointAnalyzer:
         In practice, this would involve complex matrix operations
         This is a simplified approximation for demonstration
         """
+        if n_questions == 0:
+            return 0, float('inf')
+            
         total_observations = n_questions * n_respondents * n_alternatives
         
         # Simplified D-error approximation
@@ -79,8 +83,16 @@ class ConjointAnalyzer:
         
         return min(d_efficiency, 1.0), d_error
     
-    def find_optimal_questions(self, min_questions=5, max_questions=24, n_respondents=60):
-        """Find optimal number of questions for target D-efficiency"""
+    def find_optimal_questions(self, n_respondents=60, target_efficiency=0.8):
+        """Find optimal number of questions with dynamic range"""
+        
+        # Calculate recommended minimum questions (rule of thumb: num_params + 2)
+        recommended_min = max(1, self.num_params + 2)
+        
+        # Dynamic range: start from 1, go up to 1.5 times recommended minimum
+        min_questions = 1
+        max_questions = max(recommended_min, math.ceil(recommended_min * 1.5))
+        
         results = []
         
         for n_questions in range(min_questions, max_questions + 1):
@@ -91,7 +103,7 @@ class ConjointAnalyzer:
                 'd_error': d_err
             })
         
-        return pd.DataFrame(results)
+        return pd.DataFrame(results), recommended_min, max_questions
 
 # Initialize analyzer
 analyzer = ConjointAnalyzer()
@@ -145,11 +157,10 @@ if st.button("🚀 Run Conjoint Analysis", type="primary"):
         # Generate profiles
         profiles_df = analyzer.generate_profiles(attributes)
         
-        # Calculate optimal questions
-        results_df = analyzer.find_optimal_questions(
-            min_questions=analyzer.num_params + 2,
-            max_questions=24,
-            n_respondents=n_respondents
+        # Calculate optimal questions with dynamic range
+        results_df, recommended_min, max_questions_tested = analyzer.find_optimal_questions(
+            n_respondents=n_respondents,
+            target_efficiency=target_efficiency
         )
         
         # Store results in session state
@@ -157,11 +168,15 @@ if st.button("🚀 Run Conjoint Analysis", type="primary"):
         st.session_state.results = results_df
         st.session_state.attributes = attributes
         st.session_state.num_params = analyzer.num_params
+        st.session_state.recommended_min = recommended_min
+        st.session_state.max_questions_tested = max_questions_tested
 
 # Display results if available
 if 'results' in st.session_state:
     results_df = st.session_state.results
     profiles_df = st.session_state.profiles
+    recommended_min = st.session_state.recommended_min
+    max_questions_tested = st.session_state.max_questions_tested
     
     # Main results
     col1, col2, col3, col4 = st.columns(4)
@@ -181,6 +196,9 @@ if 'results' in st.session_state:
         max_efficiency = results_df['d_efficiency'].max()
         st.metric("Maximum D-Efficiency", f"{max_efficiency:.4f}")
     
+    # Show analysis range info
+    st.info(f"📊 **Analysis Range:** Testing 1 to {max_questions_tested} questions (1.5× recommended minimum of {recommended_min})")
+    
     # Tabs for detailed results
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Efficiency Curve", "📋 Detailed Results", "🎯 Product Profiles", "🤖 GPT Recommendations"])
     
@@ -197,6 +215,7 @@ if 'results' in st.session_state:
             marker=dict(size=8)
         ))
         
+        # Add target efficiency line
         fig.add_hline(
             y=target_efficiency,
             line_dash="dash",
@@ -204,18 +223,45 @@ if 'results' in st.session_state:
             annotation_text=f"Target Efficiency ({target_efficiency})"
         )
         
+        # Add recommended minimum line
+        fig.add_vline(
+            x=recommended_min,
+            line_dash="dot",
+            line_color="blue",
+            annotation_text=f"Recommended Min ({recommended_min})"
+        )
+        
         fig.update_layout(
             title="Conjoint Design Efficiency Analysis",
             xaxis_title="Number of Questions per Respondent",
             yaxis_title="D-Efficiency",
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            xaxis=dict(
+                range=[0.5, max_questions_tested + 0.5],
+                tick0=1,
+                dtick=1
+            )
         )
         
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Additional insights
+        st.markdown("**📋 Chart Insights:**")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(f"• **Red dashed line:** Target D-efficiency ({target_efficiency})")
+            st.markdown(f"• **Blue dotted line:** Recommended minimum ({recommended_min} questions)")
+        with col_b:
+            if min_questions != "N/A":
+                st.markdown(f"• **Optimal point:** {min_questions} questions achieves target")
+            st.markdown(f"• **Range tested:** 1 to {max_questions_tested} questions")
     
     with tab2:
         st.subheader("Detailed Efficiency Results")
+        
+        # Add a note about the range
+        st.markdown(f"**Range:** 1 to {max_questions_tested} questions (recommended minimum: {recommended_min})")
         
         # Highlight optimal rows
         optimal_mask = results_df['d_efficiency'] >= target_efficiency
@@ -277,6 +323,8 @@ if 'results' in st.session_state:
                         - Respondents: {n_respondents}
                         - Target D-Efficiency: {target_efficiency}
                         - Maximum Achieved D-Efficiency: {max_efficiency:.4f}
+                        - Recommended Minimum Questions: {recommended_min}
+                        - Range Tested: 1 to {max_questions_tested} questions
                         - Optimal Questions: {min_questions if min_questions != "N/A" else "Could not achieve target"}
                         
                         Please provide recommendations for this conjoint study design including:
@@ -340,13 +388,15 @@ if 'results' in st.session_state:
         - Minimum questions per respondent: **{min_q}**
         - D-efficiency at minimum: **{eff_at_min:.4f}**
         - This design meets your target efficiency of {target_efficiency}
+        - Recommended minimum was: **{recommended_min}** questions
         """)
     else:
         st.warning(f"""
         **Target efficiency not achieved in tested range**
-        - Consider increasing the number of questions
+        - Consider increasing the number of questions beyond {max_questions_tested}
         - Or reducing the target D-efficiency threshold
         - Maximum achieved efficiency: **{max_efficiency:.4f}**
+        - Recommended minimum: **{recommended_min}** questions
         """)
 
 # Footer
