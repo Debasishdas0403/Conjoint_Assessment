@@ -310,7 +310,7 @@ if 'results' in st.session_state:
         st.metric("Maximum D-Efficiency", f"{max_efficiency:.4f}")
     
     # Clear explanation of the two different recommendations
-    st.info f"""
+    st.info(f"""
     🔍 **Understanding the Two Recommendations:**
     
     • **Optimal Questions ({optimal_min_questions})**: This is your **actual result** - the minimum questions needed to achieve your target D-efficiency of {target_efficiency}
@@ -391,15 +391,15 @@ if 'results' in st.session_state:
                 st.markdown(f"🟢 **Green solid line:** Your optimal result ({optimal_min_questions} questions)")
         with col_b:
             st.markdown("**Key Differences:**")
-            st.markdown(f"• **Theoretical baseline:** Rule of thumb (Parameters + 2)")
-            st.markdown(f"• **Optimal result:** Actual minimum for your target")
+            st.markdown("• **Theoretical baseline:** Rule of thumb (Parameters + 2)")
+            st.markdown("• **Optimal result:** Actual minimum for your target")
             if optimal_min_questions != "N/A":
                 if optimal_min_questions < theoretical_min:
-                    st.markdown(f"• **Good news:** You need fewer questions than expected!")
+                    st.markdown("• **Good news:** You need fewer questions than expected!")
                 elif optimal_min_questions > theoretical_min:
-                    st.markdown(f"• **Note:** You need more questions than the rule suggests")
+                    st.markdown("• **Note:** You need more questions than the rule suggests")
                 else:
-                    st.markdown(f"• **Perfect:** Results match the theoretical baseline")
+                    st.markdown("• **Perfect:** Results match the theoretical baseline")
     
     with tab2:
         st.subheader("Detailed Efficiency Results")
