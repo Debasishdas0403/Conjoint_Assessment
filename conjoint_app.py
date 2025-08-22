@@ -42,12 +42,6 @@ openai_available = get_openai_client() is not None
 # Sidebar for inputs
 st.sidebar.header("📋 Survey Design Parameters")
 
-# Show OpenAI status in sidebar
-if openai_available:
-    st.sidebar.success("🤖 GPT Recommendations: Available")
-else:
-    st.sidebar.warning("🤖 GPT Recommendations: Unavailable (API key not configured)")
-
 class ConjointAnalyzer:
     def __init__(self):
         self.attributes = {}
