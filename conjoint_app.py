@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
-from pyDOE2 import fullfact
+from pyDOE3 import fullfact
 from itertools import product
 import json
 import base64
