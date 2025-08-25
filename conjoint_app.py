@@ -3,552 +3,372 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from itertools import product
-import openai
-from scipy.optimize import minimize
-import warnings
-import math
-warnings.filterwarnings('ignore')
+from advanced_utils import AdvancedConjointAnalyzer
 
-# Set page config
+# Page configuration
 st.set_page_config(
-    page_title="Conjoint Demand Estimation Tool",
+    page_title="Conjoint Analysis Tool",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Title and description
-st.title("🎯 Conjoint Demand Estimation Analysis Tool")
+# Custom CSS
 st.markdown("""
-This tool helps you design and analyze conjoint choice experiments for demand estimation.
-It calculates D-efficiency and provides GPT-powered recommendations for optimal survey design.
-""")
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .success-box {
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Initialize OpenAI client from secrets
-def get_openai_client():
-    """Get OpenAI client using secrets"""
-    try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        return openai.OpenAI(api_key=api_key)
-    except KeyError:
-        return None
-    except Exception as e:
-        st.error(f"Error initializing OpenAI client: {str(e)}")
-        return None
+# Initialize session state
+if 'attributes' not in st.session_state:
+    st.session_state.attributes = {}
+if 'analyzer' not in st.session_state:
+    st.session_state.analyzer = AdvancedConjointAnalyzer()
 
-# Check if OpenAI is available
-openai_available = get_openai_client() is not None
-
-# Sidebar for inputs
-st.sidebar.header("📋 Survey Design Parameters")
-
-class ConjointAnalyzer:
-    def __init__(self):
-        self.attributes = {}
-        self.profiles = None
-        self.num_params = 0
-        
-    def generate_profiles(self, attribute_levels):
-        """Generate all possible product profiles from list of level counts"""
-        # Create attribute structure from level counts
-        self.attributes = {}
-        for i, num_levels in enumerate(attribute_levels):
-            attr_name = f"Attribute_{i+1}"
-            levels = [f"Level_{j+1}" for j in range(num_levels)]
-            self.attributes[attr_name] = levels
-        
-        attribute_names = list(self.attributes.keys())
-        level_combinations = list(product(*self.attributes.values()))
-        
-        profiles_df = pd.DataFrame(level_combinations, columns=attribute_names)
-        self.profiles = profiles_df
-        
-        # Calculate number of parameters (sum of levels - 1 for each attribute)
-        self.num_params = sum(num_levels - 1 for num_levels in attribute_levels)
-        
-        return profiles_df
+def main():
+    st.markdown('<h1 class="main-header">📊 Advanced Conjoint Analysis Tool</h1>', unsafe_allow_html=True)
+    st.markdown("**Optimize your conjoint study design with statistical precision**")
     
-    def calculate_d_efficiency(self, n_questions, n_respondents=60, n_alternatives=2):
-        """
-        More realistic D-efficiency calculation based on conjoint analysis principles
-        """
-        if n_questions == 0:
-            return 0, float('inf')
-        
-        # Total choice observations
-        total_choices = n_questions * n_respondents
-        
-        # For conjoint analysis, we need sufficient observations per parameter
-        observations_per_param = total_choices / self.num_params if self.num_params > 0 else 0
-        
-        # Calculate D-error based on Fisher Information Matrix approximation
-        if observations_per_param <= 1:
-            d_efficiency = 0.1 * observations_per_param
-        elif observations_per_param <= 5:
-            d_efficiency = 0.2 + 0.15 * (observations_per_param - 1)
-        elif observations_per_param <= 10:
-            d_efficiency = 0.8 + 0.04 * (observations_per_param - 5)
-        elif observations_per_param <= 20:
-            d_efficiency = 1.0 - 0.2 * np.exp(-(observations_per_param - 10) / 5)
-        else:
-            d_efficiency = 1.0 - 0.1 * np.exp(-(observations_per_param - 20) / 10)
-        
-        # Add complexity penalty for designs with many alternatives
-        complexity_factor = 1 - (n_alternatives - 2) * 0.05
-        d_efficiency = d_efficiency * max(complexity_factor, 0.5)
-        
-        # Ensure bounds
-        d_efficiency = max(0, min(d_efficiency, 1.0))
-        
-        # Calculate corresponding D-error
-        d_error = (1 / d_efficiency) ** (1/self.num_params) if d_efficiency > 0 else float('inf')
-        
-        return d_efficiency, d_error
+    # Sidebar
+    st.sidebar.title("🎯 Study Configuration")
     
-    def find_optimal_questions(self, n_respondents=60, target_efficiency=0.8):
-        """Find optimal number of questions with dynamic range"""
+    # Attributes section
+    st.sidebar.subheader("📝 Attributes & Levels")
+    
+    with st.sidebar.form("add_attribute_form"):
+        attr_name = st.text_input("Attribute Name", placeholder="e.g., Price, Brand")
+        attr_levels = st.text_area(
+            "Levels (one per line)", 
+            placeholder="e.g.,\n\$10\n\$15\n\$20",
+            height=80
+        )
         
-        # Calculate recommended minimum questions
-        recommended_min = max(1, self.num_params + 2)
+        add_attr = st.form_submit_button("➕ Add Attribute")
         
-        # Dynamic range: start from 1, go up to 1.5 times recommended minimum
-        min_questions = 1
-        max_questions = max(recommended_min, math.ceil(recommended_min * 1.5))
-        
-        results = []
-        
-        for n_questions in range(min_questions, max_questions + 1):
-            d_eff, d_err = self.calculate_d_efficiency(n_questions, n_respondents)
-            results.append({
-                'num_questions': n_questions,
-                'd_efficiency': d_eff,
-                'd_error': d_err
-            })
-        
-        return pd.DataFrame(results), recommended_min, max_questions
-
-# Initialize analyzer
-analyzer = ConjointAnalyzer()
-
-# Simplified attribute input
-st.sidebar.subheader("🔧 Define Your Study")
-
-# Method selection
-input_method = st.sidebar.radio(
-    "Choose input method:",
-    ["Quick Setup", "Custom Setup"],
-    help="Quick Setup: Enter just numbers. Custom Setup: Specify each attribute."
-)
-
-if input_method == "Quick Setup":
-    st.sidebar.markdown("**Just enter the numbers - no names needed!**")
+        if add_attr:
+            if attr_name and attr_levels:
+                levels = [level.strip() for level in attr_levels.split('\n') if level.strip()]
+                if len(levels) >= 2:
+                    st.session_state.attributes[attr_name] = levels
+                    st.success(f"Added '{attr_name}' with {len(levels)} levels")
+                    st.rerun()
+                else:
+                    st.error("Please provide at least 2 levels")
+            else:
+                st.error("Please provide both attribute name and levels")
     
-    # Number of attributes
-    num_attributes = st.sidebar.number_input(
-        "Number of Attributes", 
-        min_value=2, 
-        max_value=10, 
-        value=3,
-        help="How many different features/attributes does your product have?"
-    )
+    # Display current attributes
+    if st.session_state.attributes:
+        st.sidebar.subheader("📋 Current Attributes")
+        for attr_name, levels in st.session_state.attributes.items():
+            with st.sidebar.expander(f"**{attr_name}** ({len(levels)} levels)"):
+                for i, level in enumerate(levels, 1):
+                    st.write(f"{i}. {level}")
+                
+                if st.button(f"🗑️ Remove {attr_name}", key=f"remove_{attr_name}"):
+                    del st.session_state.attributes[attr_name]
+                    st.rerun()
     
-    # Get levels for each attribute in a compact way
-    st.sidebar.markdown(f"**Number of levels for each attribute:**")
+    # Survey parameters
+    st.sidebar.subheader("📊 Survey Parameters")
+    n_respondents = st.sidebar.number_input("Number of Respondents", min_value=10, max_value=1000, value=100)
+    n_alternatives = st.sidebar.selectbox("Alternatives per Question", [2, 3, 4], index=0)
+    target_efficiency = st.sidebar.slider("Target D-Efficiency", 0.5, 1.0, 0.8, 0.05)
     
-    attribute_levels = []
+    # Main content
+    if not st.session_state.attributes:
+        st.info("👆 Please add attributes and levels using the sidebar to get started!")
+        return
     
-    # Use columns to make it more compact
-    if num_attributes <= 5:
-        # For 5 or fewer attributes, show in single column
-        for i in range(num_attributes):
-            levels = st.sidebar.number_input(
-                f"Attribute {i+1}", 
-                min_value=2, 
-                max_value=6, 
-                value=3,
-                key=f"quick_levels_{i}"
-            )
-            attribute_levels.append(levels)
-    else:
-        # For more than 5 attributes, use more compact display
-        cols_per_row = 2
-        for i in range(0, num_attributes, cols_per_row):
-            col1, col2 = st.sidebar.columns(2)
-            
-            with col1:
-                if i < num_attributes:
-                    levels = st.sidebar.number_input(
-                        f"Attr {i+1}", 
-                        min_value=2, 
-                        max_value=6, 
-                        value=3,
-                        key=f"quick_levels_{i}"
-                    )
-                    attribute_levels.append(levels)
-            
-            with col2:
-                if i+1 < num_attributes:
-                    levels = st.sidebar.number_input(
-                        f"Attr {i+2}", 
-                        min_value=2, 
-                        max_value=6, 
-                        value=3,
-                        key=f"quick_levels_{i+1}"
-                    )
-                    attribute_levels.append(levels)
-    
-    # Create attributes summary
-    total_profiles = np.prod(attribute_levels) if attribute_levels else 0
-    total_params = sum(level - 1 for level in attribute_levels) if attribute_levels else 0
-    
-    st.sidebar.info(f"""
-    **Study Summary:**
-    - {num_attributes} attributes
-    - {total_profiles:,} total profiles
-    - {total_params} parameters to estimate
-    """)
-
-else:  # Custom Setup
-    st.sidebar.markdown("**Define each attribute with custom names:**")
-    
-    if 'num_attributes_custom' not in st.session_state:
-        st.session_state.num_attributes_custom = 3
-
-    num_attributes = st.sidebar.number_input(
-        "Number of Attributes", 
-        min_value=2, 
-        max_value=10, 
-        value=st.session_state.num_attributes_custom,
-        key="custom_num_attrs"
-    )
-
-    attribute_levels = []
-    attributes = {}
-    
-    for i in range(num_attributes):
-        with st.sidebar.expander(f"Attribute {i+1}", expanded=True):
-            attr_name = st.text_input(f"Name", value=f"Attribute_{i+1}", key=f"custom_name_{i}")
-            
-            num_levels = st.number_input(
-                f"Number of levels", 
-                min_value=2, 
-                max_value=6, 
-                value=3,
-                key=f"custom_levels_{i}"
-            )
-            
-            levels = []
-            for j in range(num_levels):
-                level = st.text_input(
-                    f"Level {j+1}", 
-                    value=f"Level_{j+1}",
-                    key=f"custom_level_{i}_{j}"
-                )
-                levels.append(level)
-            
-            attributes[attr_name] = levels
-            attribute_levels.append(num_levels)
-
-# Survey parameters
-st.sidebar.subheader("📊 Survey Parameters")
-n_respondents = st.sidebar.number_input("Number of Respondents", min_value=10, max_value=1000, value=60)
-n_alternatives = st.sidebar.selectbox("Alternatives per Question", [2, 3, 4], index=0)
-target_efficiency = st.sidebar.slider("Target D-Efficiency", 0.5, 1.0, 0.8, 0.05)
-
-# Main analysis
-if st.button("🚀 Run Conjoint Analysis", type="primary"):
-    if attribute_levels and all(level >= 2 for level in attribute_levels):
-        with st.spinner("Generating profiles and calculating efficiency..."):
-            
-            # Generate profiles
-            profiles_df = analyzer.generate_profiles(attribute_levels)
-            
-            # Calculate optimal questions with dynamic range
-            results_df, theoretical_min, max_questions_tested = analyzer.find_optimal_questions(
-                n_respondents=n_respondents,
-                target_efficiency=target_efficiency
-            )
-            
-            # Store results in session state
-            st.session_state.profiles = profiles_df
-            st.session_state.results = results_df
-            st.session_state.attribute_levels = attribute_levels
-            st.session_state.num_params = analyzer.num_params
-            st.session_state.theoretical_min = theoretical_min
-            st.session_state.max_questions_tested = max_questions_tested
-    else:
-        st.error("Please ensure all attributes have at least 2 levels.")
-
-# Display results if available
-if 'results' in st.session_state:
-    results_df = st.session_state.results
-    profiles_df = st.session_state.profiles
-    theoretical_min = st.session_state.theoretical_min
-    max_questions_tested = st.session_state.max_questions_tested
-    
-    # Main results with clear distinction
+    # Study summary
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Profiles", f"{len(profiles_df):,}")
+        st.metric("Attributes", len(st.session_state.attributes))
     
     with col2:
-        st.metric("Parameters to Estimate", st.session_state.num_params)
+        total_levels = sum(len(levels) for levels in st.session_state.attributes.values())
+        st.metric("Total Levels", total_levels)
     
     with col3:
-        optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
-        optimal_min_questions = optimal_questions['num_questions'].min() if len(optimal_questions) > 0 else "N/A"
-        st.metric(
-            "📊 Optimal Questions", 
-            optimal_min_questions,
-            help=f"Minimum questions needed to achieve {target_efficiency} D-efficiency (based on actual analysis results)"
-        )
+        num_params = sum(len(levels) - 1 for levels in st.session_state.attributes.values()) + 1
+        st.metric("Parameters", num_params)
     
     with col4:
-        max_efficiency = results_df['d_efficiency'].max()
-        st.metric("Maximum D-Efficiency", f"{max_efficiency:.4f}")
+        full_factorial = np.prod([len(levels) for levels in st.session_state.attributes.values()])
+        st.metric("Full Factorial", f"{full_factorial:,}")
     
-    # Clear explanation of the two different recommendations
-    st.info(f"""
-    🔍 **Understanding the Two Recommendations:**
+    # Analysis button
+    if st.button("🚀 Run Advanced Analysis", type="primary", use_container_width=True):
+        run_analysis(n_respondents, n_alternatives, target_efficiency, num_params)
+
+def run_analysis(n_respondents, n_alternatives, target_efficiency, num_params):
+    """Run the complete conjoint analysis"""
     
-    • **Optimal Questions ({optimal_min_questions})**: This is your **actual result** - the minimum questions needed to achieve your target D-efficiency of {target_efficiency}
+    with st.spinner("🔄 Running advanced D-efficiency optimization..."):
+        
+        analyzer = st.session_state.analyzer
+        
+        # Find optimal design
+        results_df, theoretical_min, max_questions_tested = analyzer.find_optimal_questions_advanced(
+            st.session_state.attributes, 
+            n_respondents, 
+            target_efficiency
+        )
+        
+        # Store results
+        st.session_state.results = results_df
+        st.session_state.theoretical_min = theoretical_min
+        st.session_state.max_questions_tested = max_questions_tested
+        st.session_state.num_params = num_params
     
-    • **Theoretical Baseline ({theoretical_min})**: This is a **statistical rule of thumb** (Parameters + 2 = {st.session_state.num_params} + 2) shown as the blue line in the chart
+    # Display results
+    display_results(results_df, theoretical_min, target_efficiency, n_respondents)
+
+def display_results(results_df, theoretical_min, target_efficiency, n_respondents):
+    """Display comprehensive analysis results"""
     
-    **→ Use the Optimal Questions ({optimal_min_questions}) for your survey design!**
-    """)
+    st.markdown("---")
+    st.subheader("🎯 Analysis Results")
     
-    # Show study design summary
-    attribute_summary = ", ".join([f"{i+1}({levels})" for i, levels in enumerate(st.session_state.attribute_levels)])
-    st.success(f"🎯 **Study Design:** {len(st.session_state.attribute_levels)} attributes with levels: {attribute_summary} | Testing 1 to {max_questions_tested} questions")
-    
-    # Tabs for detailed results
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Efficiency Curve", "📋 Detailed Results", "🎯 Product Profiles", "🤖 GPT Recommendations"])
+    # Create tabs for different views
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Efficiency Chart", "📊 Detailed Results", "🎯 Recommendations", "📋 Design Summary"])
     
     with tab1:
-        st.subheader("D-Efficiency vs Number of Questions")
-        
+        display_efficiency_chart(results_df, theoretical_min, target_efficiency)
+    
+    with tab2:
+        display_detailed_results(results_df, target_efficiency, n_respondents, theoretical_min)
+    
+    with tab3:
+        display_recommendations(results_df, target_efficiency, theoretical_min)
+    
+    with tab4:
+        display_design_summary()
+
+def display_efficiency_chart(results_df, theoretical_min, target_efficiency):
+    """Display the main efficiency chart"""
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        # Main efficiency plot
         fig = go.Figure()
+        
+        # D-efficiency line
         fig.add_trace(go.Scatter(
             x=results_df['num_questions'],
             y=results_df['d_efficiency'],
             mode='lines+markers',
             name='D-Efficiency',
-            line=dict(color='darkgreen', width=3),
+            line=dict(color='#1f77b4', width=3),
             marker=dict(size=8)
         ))
         
-        # Add target efficiency line
+        # Target line
         fig.add_hline(
-            y=target_efficiency,
-            line_dash="dash",
+            y=target_efficiency, 
+            line_dash="dash", 
             line_color="red",
-            annotation_text=f"Target Efficiency ({target_efficiency})"
+            annotation_text=f"Target: {target_efficiency}"
         )
         
-        # Add theoretical minimum line with clear label
+        # Theoretical minimum vertical line
         fig.add_vline(
             x=theoretical_min,
             line_dash="dot",
-            line_color="blue",
-            annotation_text=f"Theoretical Baseline ({theoretical_min})"
+            line_color="orange",
+            annotation_text=f"Theoretical Min: {theoretical_min}"
         )
         
-        # Highlight optimal point if found
-        if optimal_min_questions != "N/A":
-            fig.add_vline(
-                x=optimal_min_questions,
-                line_dash="solid",
-                line_color="green",
-                annotation_text=f"Optimal Result ({optimal_min_questions})"
-            )
+        # Highlight optimal point
+        meets_target = results_df[results_df['d_efficiency'] >= target_efficiency]
+        if not meets_target.empty:
+            optimal_row = meets_target.iloc[0]
+            fig.add_trace(go.Scatter(
+                x=[optimal_row['num_questions']],
+                y=[optimal_row['d_efficiency']],
+                mode='markers',
+                name='Optimal Design',
+                marker=dict(size=15, color='red', symbol='star')
+            ))
         
         fig.update_layout(
-            title="Conjoint Design Efficiency Analysis",
+            title="D-Efficiency vs Number of Questions per Respondent",
             xaxis_title="Number of Questions per Respondent",
             yaxis_title="D-Efficiency",
-            hovermode='x unified',
-            template='plotly_white',
-            xaxis=dict(
-                range=[0.5, max_questions_tested + 0.5],
-                tick0=1,
-                dtick=1
-            ),
-            yaxis=dict(range=[0, 1.1])
+            height=500,
+            showlegend=True
         )
         
         st.plotly_chart(fig, use_container_width=True)
-        
-        # Enhanced chart insights with clear distinction
-        st.markdown("**📋 Chart Legend & Insights:**")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown(f"🔴 **Red dashed line:** Your target D-efficiency ({target_efficiency})")
-            st.markdown(f"🔵 **Blue dotted line:** Theoretical baseline ({theoretical_min} questions)")
-            if optimal_min_questions != "N/A":
-                st.markdown(f"🟢 **Green solid line:** Your optimal result ({optimal_min_questions} questions)")
-        with col_b:
-            st.markdown("**Key Differences:**")
-            st.markdown("• **Theoretical baseline:** Rule of thumb (Parameters + 2)")
-            st.markdown("• **Optimal result:** Actual minimum for your target")
-            if optimal_min_questions != "N/A":
-                if optimal_min_questions < theoretical_min:
-                    st.markdown("• **Good news:** You need fewer questions than expected!")
-                elif optimal_min_questions > theoretical_min:
-                    st.markdown("• **Note:** You need more questions than the rule suggests")
-                else:
-                    st.markdown("• **Perfect:** Results match the theoretical baseline")
     
-    with tab2:
-        st.subheader("Detailed Efficiency Results")
+    with col2:
+        st.subheader("🎯 Key Findings")
         
-        # Enhanced table with clear indicators
-        results_display = results_df.copy()
-        results_display['obs_per_param'] = (results_display['num_questions'] * n_respondents) / st.session_state.num_params
-        results_display['obs_per_param'] = results_display['obs_per_param'].round(2)
-        
-        # Add status indicators
-        results_display['status'] = ''
-        if optimal_min_questions != "N/A":
-            results_display.loc[results_display['num_questions'] == optimal_min_questions, 'status'] = '🎯 OPTIMAL'
-        results_display.loc[results_display['num_questions'] == theoretical_min, 'status'] = '📏 THEORETICAL'
-        results_display.loc[results_display['d_efficiency'] >= target_efficiency, 'status'] = results_display.loc[results_display['d_efficiency'] >= target_efficiency, 'status'] + ' ✅'
-        
-        # Reorder columns
-        results_display = results_display[['num_questions', 'status', 'obs_per_param', 'd_efficiency', 'd_error']]
-        
-        # Highlight optimal rows
-        optimal_mask = results_display['d_efficiency'] >= target_efficiency
-        
-        st.dataframe(
-            results_display.style.apply(
-                lambda x: ['background-color: lightgreen' if optimal_mask[x.name] else '' for _ in x], 
-                axis=1
-            ),
-            use_container_width=True
-        )
-        
-        # Clear explanation below table
-        st.markdown(f"""
-        **🏷️ Status Indicators:**
-        - **🎯 OPTIMAL**: Your actual optimal choice ({optimal_min_questions} questions)
-        - **📏 THEORETICAL**: Statistical baseline ({theoretical_min} questions) 
-        - **✅**: Meets your target D-efficiency of {target_efficiency}
-        """)
-        
-        # Download button for results
-        csv = results_display.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Results as CSV",
-            data=csv,
-            file_name="conjoint_efficiency_results.csv",
-            mime="text/csv"
-        )
-    
-    with tab3:
-        st.subheader("Product Profiles")
-        st.write(f"**Total possible profiles:** {len(profiles_df):,}")
-        
-        # Show sample profiles
-        if len(profiles_df) > 20:
-            st.write("**Sample profiles (first 20):**")
-            st.dataframe(profiles_df.head(20))
+        if not meets_target.empty:
+            optimal = meets_target.iloc[0]
+            st.success("✅ Target achieved!")
+            st.metric("Optimal Questions", int(optimal['num_questions']))
+            st.metric("D-Efficiency", f"{optimal['d_efficiency']:.3f}")
+            st.metric("Total Observations", f"{optimal['total_runs']:,}")
         else:
-            st.dataframe(profiles_df)
-        
-        # Download profiles
-        profiles_csv = profiles_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download All Profiles as CSV",
-            data=profiles_csv,
-            file_name="product_profiles.csv",
-            mime="text/csv"
-        )
-    
-    with tab4:
-        st.subheader("🤖 GPT-Powered Recommendations")
-        
-        if openai_available:
-            if st.button("Generate GPT Recommendations"):
-                with st.spinner("Generating AI recommendations..."):
-                    try:
-                        client = get_openai_client()
-                        
-                        # Prepare context for GPT
-                        context = f"""
-                        Conjoint Analysis Results Summary:
-                        - Total Attributes: {len(st.session_state.attribute_levels)}
-                        - Attribute Levels: {st.session_state.attribute_levels}
-                        - Total Profiles: {len(profiles_df):,}
-                        - Parameters to Estimate: {st.session_state.num_params}
-                        - Respondents: {n_respondents}
-                        - Target D-Efficiency: {target_efficiency}
-                        - Maximum Achieved D-Efficiency: {max_efficiency:.4f}
-                        - Theoretical Baseline (Rule of Thumb): {theoretical_min} questions
-                        - Optimal Questions (Actual Result): {optimal_min_questions if optimal_min_questions != "N/A" else "Could not achieve target"}
-                        - Range Tested: 1 to {max_questions_tested} questions
-                        
-                        Please provide recommendations for this conjoint study design.
-                        """
-                        
-                        response = client.chat.completions.create(
-                            model="gpt-4",
-                            messages=[
-                                {"role": "system", "content": "You are a market research expert specializing in conjoint analysis and survey design."},
-                                {"role": "user", "content": context}
-                            ],
-                            max_tokens=1500,
-                            temperature=0.7
-                        )
-                        
-                        st.success("GPT Recommendations Generated!")
-                        st.markdown(response.choices[0].message.content)
-                        
-                    except Exception as e:
-                        st.error(f"Error generating GPT recommendations: {str(e)}")
-        else:
-            st.info("🔑 OpenAI API key not configured in secrets. Contact administrator to enable GPT recommendations.")
+            max_eff_row = results_df.loc[results_df['d_efficiency'].idxmax()]
+            st.warning("⚠️ Target not achieved")
+            st.metric("Best Questions", int(max_eff_row['num_questions']))
+            st.metric("Max D-Efficiency", f"{max_eff_row['d_efficiency']:.3f}")
+            st.info(f"Consider increasing questions beyond {results_df['num_questions'].max()}")
 
-# Enhanced Summary section with clear distinction
-if 'results' in st.session_state:
-    st.markdown("---")
-    st.subheader("📊 Final Recommendation")
+def display_detailed_results(results_df, target_efficiency, n_respondents, theoretical_min):
+    """Display detailed results table"""
+    
+    # Prepare display dataframe
+    display_df = results_df.copy()
+    display_df['Status'] = ''
+    
+    # Add status indicators
+    optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
+    if not optimal_questions.empty:
+        optimal_min = optimal_questions['num_questions'].min()
+        display_df.loc[display_df['num_questions'] == optimal_min, 'Status'] = '🎯 OPTIMAL'
+    
+    display_df.loc[display_df['num_questions'] == theoretical_min, 'Status'] += ' 📏 THEORETICAL'
+    display_df.loc[display_df['d_efficiency'] >= target_efficiency, 'Status'] += ' ✅ MEETS TARGET'
+    
+    # Format columns
+    display_df['d_efficiency'] = display_df['d_efficiency'].round(4)
+    display_df['d_error'] = display_df['d_error'].round(4)
+    display_df['avg_std_error'] = display_df['avg_std_error'].round(4)
+    display_df['obs_per_param'] = display_df['obs_per_param'].round(1)
+    
+    # Reorder columns
+    columns = ['num_questions', 'Status', 'total_runs', 'd_efficiency', 'd_error', 'avg_std_error', 'obs_per_param']
+    display_df = display_df[columns]
+    
+    # Style the dataframe
+    def highlight_optimal(s):
+        return ['background-color: lightgreen' if '🎯 OPTIMAL' in str(val) else '' for val in s]
+    
+    st.dataframe(
+        display_df.style.apply(highlight_optimal, subset=['Status']),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Download button
+    csv = display_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download Results as CSV",
+        data=csv,
+        file_name="conjoint_efficiency_results.csv",
+        mime="text/csv"
+    )
+
+def display_recommendations(results_df, target_efficiency, theoretical_min):
+    """Display actionable recommendations"""
     
     optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
     
-    if len(optimal_questions) > 0:
-        min_q = optimal_questions['num_questions'].min()
-        eff_at_min = optimal_questions[optimal_questions['num_questions'] == min_q]['d_efficiency'].iloc[0]
-        obs_per_param_at_min = (min_q * n_respondents) / st.session_state.num_params
+    if not optimal_questions.empty:
+        optimal = optimal_questions.iloc[0]
         
-        st.success(f"""
-        **🎯 USE THIS FOR YOUR SURVEY DESIGN:**
-        - **Optimal questions per respondent: {min_q}**
-        - D-efficiency achieved: **{eff_at_min:.4f}**
-        - Observations per parameter: **{obs_per_param_at_min:.1f}**
-        - This meets your target efficiency of {target_efficiency}
+        st.markdown(f"""
+        <div class="success-box">
+            <h3>✅ Recommended Design</h3>
+            <p><strong>Use {int(optimal['num_questions'])} questions per respondent</strong></p>
+            <ul>
+                <li>Achieves D-efficiency of {optimal['d_efficiency']:.3f}</li>
+                <li>Total observations: {optimal['total_runs']:,}</li>
+                <li>Observations per parameter: {optimal['obs_per_param']:.1f}</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
         
-        **📊 Comparison:**
-        - Theoretical baseline was: **{theoretical_min}** questions
-        - Your actual optimal: **{min_q}** questions
-        - Difference: **{min_q - theoretical_min:+d}** questions
-        """)
     else:
-        st.warning(f"""
-        **⚠️ Target efficiency not achieved in tested range**
-        - Consider increasing the number of questions beyond {max_questions_tested}
-        - Or reducing the target D-efficiency threshold
-        - Maximum achieved efficiency: **{max_efficiency:.4f}**
-        - Theoretical baseline: **{theoretical_min}** questions
-        """)
+        max_eff_row = results_df.loc[results_df['d_efficiency'].idxmax()]
+        
+        st.markdown(f"""
+        <div class="warning-box">
+            <h3>⚠️ Target Not Achieved</h3>
+            <p><strong>Best option: {int(max_eff_row['num_questions'])} questions</strong></p>
+            <p>Maximum D-efficiency: {max_eff_row['d_efficiency']:.3f}</p>
+            
+            <h4>Options to improve efficiency:</h4>
+            <ol>
+                <li>Increase number of questions beyond {results_df['num_questions'].max()}</li>
+                <li>Increase number of respondents</li>
+                <li>Reduce number of attribute levels</li>
+                <li>Accept lower target efficiency</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Efficiency trend analysis
+    st.subheader("📊 Efficiency Trend Analysis")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Marginal gains
+        results_df['marginal_gain'] = results_df['d_efficiency'].diff()
+        
+        fig_marginal = go.Figure()
+        fig_marginal.add_trace(go.Bar(
+            x=results_df['num_questions'][1:],
+            y=results_df['marginal_gain'][1:],
+            name='Marginal D-Efficiency Gain'
+        ))
+        
+        fig_marginal.update_layout(
+            title="Marginal Efficiency Gains",
+            xaxis_title="Questions per Respondent",
+            yaxis_title="Marginal Gain",
+            height=300
+        )
+        
+        st.plotly_chart(fig_marginal, use_container_width=True)
+    
+    with col2:
+        # Cost-benefit analysis
+        results_df['cost_benefit'] = results_df['d_efficiency'] / results_df['num_questions']
+        
+        fig_cb = go.Figure()
+        fig_cb.add_trace(go.Scatter(
+            x=results_df['num_questions'],
+            y=results_df['cost_benefit'],
+            mode='lines+markers',
+            name='Efficiency per Question'
+        ))
+        
+        fig_cb.update_layout(
+            title="Efficiency per Question (Cost-Benefit)",
+            xaxis_title="Questions per Respondent",
+            yaxis_title="D-Efficiency / Questions",
+            height=300
+        )
+        
+        st.plotly_chart(fig_cb, use_container_width=True)
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center'>
-<p><strong>Conjoint Demand Estimation Tool</strong><br>
-Built with Streamlit | Powered by Python & OpenAI</p>
-</div>
-""", unsafe_allow_html=True)
+def display_design_summary():
+    """Display comprehensive design summary"""
