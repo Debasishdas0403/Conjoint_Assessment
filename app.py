@@ -41,24 +41,31 @@ def calculate_d_efficiency(df, attributes, levels):
     except Exception as e:
         return 0
 
-def calculate_optimal_cards(num_respondents, blocking, n_blocks, levels_per_attribute):
-    """Calculate optimal number of cards ensuring sufficient observations for D-efficiency"""
-    # Minimum cards needed: 3x the number of parameters to estimate
+def calculate_optimal_cards(num_respondents, blocking, n_blocks, levels_per_attribute, user_cards):
+    """Calculate optimal number of cards with user input option"""
+    # Minimum cards needed: 3x the number of parameters
     min_cards_needed = sum(l - 1 for l in levels_per_attribute) * 3
     
     if blocking:
-        # Ensure each block has minimum 15 cards or enough for parameters
         min_cards_per_block = max(15, min_cards_needed // n_blocks)
         cards_per_block = max(min_cards_per_block, num_respondents // n_blocks)
         total_cards = cards_per_block * n_blocks
     else:
-        # For no blocking, ensure at least as many cards as respondents or minimum needed
         total_cards = max(num_respondents, min_cards_needed)
         cards_per_block = total_cards
     
-    # Don't exceed total possible combinations
+    # If user specifies cards, use that instead (with validation)
+    if user_cards > 0:
+        total_cards = min(user_cards, np.prod(levels_per_attribute))
+        if blocking:
+            cards_per_block = total_cards // n_blocks
+        else:
+            cards_per_block = total_cards
+    
+    # Cap at total possible combinations
     total_combinations = np.prod(levels_per_attribute)
     total_cards = min(total_cards, total_combinations)
+    cards_per_block = min(cards_per_block, total_cards)
     
     return int(total_cards), int(cards_per_block)
 
@@ -91,8 +98,8 @@ def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_
     
     return pd.DataFrame(block_data)
 
-def generate_design(num_attributes, levels_per_attribute, num_respondents, blocking, n_blocks):
-    """Generate complete experimental design with optimal card calculation"""
+def generate_design(num_attributes, levels_per_attribute, num_respondents, blocking, n_blocks, user_cards):
+    """Generate complete experimental design with user-specified or optimal cards"""
     # Validate inputs
     if len(levels_per_attribute) != num_attributes:
         st.error(f"Please enter exactly {num_attributes} level values")
@@ -102,9 +109,9 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
     attributes = [f'Attr{i+1}' for i in range(num_attributes)]
     levels = {f'Attr{i+1}': list(range(1, l+1)) for i, l in enumerate(levels_per_attribute)}
     
-    # Calculate optimal number of cards (THIS IS THE KEY FIX)
+    # Calculate optimal cards (considering user input)
     total_cards, cards_per_block = calculate_optimal_cards(
-        num_respondents, blocking, n_blocks, levels_per_attribute
+        num_respondents, blocking, n_blocks, levels_per_attribute, user_cards
     )
     
     # Adjust for non-blocking
@@ -123,12 +130,16 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
         else:
             block_size = cards_per_block
         
-        df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
-        block_dfs.append(df_block)
-        cards_so_far += block_size
+        if block_size > 0:  # Only create block if it has cards
+            df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
+            block_dfs.append(df_block)
+            cards_so_far += block_size
     
     # Combine all blocks
-    design_df = pd.concat(block_dfs, ignore_index=True)
+    if block_dfs:
+        design_df = pd.concat(block_dfs, ignore_index=True)
+    else:
+        return None, None
     
     # Calculate D-efficiency
     d_eff = calculate_d_efficiency(design_df, attributes, levels)
@@ -143,6 +154,7 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
     # Calculate additional metrics
     total_combinations = np.prod(levels_per_attribute)
     design_efficiency = (len(design_df) / total_combinations) * 100
+    parameters_estimated = sum(l - 1 for l in levels_per_attribute)
     
     # Compile KPIs
     kpis = {
@@ -159,8 +171,9 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
         'Statistical Properties': {
             'D-Efficiency (%)': round(float(d_eff * 100), 2),
             'Design Type': 'Fractional Factorial' if len(design_df) < total_combinations else 'Full Factorial',
-            'Parameters Estimated': int(sum(l - 1 for l in levels_per_attribute)),
-            'Design Efficiency': f"{round(design_efficiency, 1)}% of full factorial"
+            'Parameters Estimated': int(parameters_estimated),
+            'Design Efficiency': f"{round(design_efficiency, 1)}% of full factorial",
+            'Total Combinations': int(total_combinations)
         },
         'Approach': approach
     }
@@ -214,8 +227,20 @@ def main():
     num_respondents = st.sidebar.number_input(
         'Number of Respondents', 
         min_value=10, max_value=1000, value=100,
-        help="Total number of respondents for the study (cards will be calculated automatically)"
+        help="Total number of respondents for the study"
     )
+    
+    # NEW: Number of Cards input
+    user_cards = st.sidebar.number_input(
+        'Number of Cards (0 = Auto Calculate)', 
+        min_value=0, max_value=1000, value=0,
+        help="Specify exact number of cards, or enter 0 for automatic calculation based on statistical requirements"
+    )
+    
+    # Show recommendation if user enters 0
+    if user_cards == 0:
+        min_cards_needed = sum(l - 1 for l in levels_per_attribute) * 3
+        st.sidebar.info(f"📊 Recommended minimum cards: {min_cards_needed}")
     
     blocking_option = st.sidebar.selectbox(
         'Enable Blocking?', 
@@ -237,7 +262,7 @@ def main():
         with st.spinner('Generating optimized experimental design...'):
             result = generate_design(
                 num_attributes, levels_per_attribute, num_respondents, 
-                blocking_option == 'Yes', n_blocks
+                blocking_option == 'Yes', n_blocks, user_cards
             )
         
         if result[0] is not None:
@@ -267,6 +292,13 @@ def main():
                 
                 st.markdown("### 🔬 Methodology")
                 st.markdown(kpis['Approach'])
+                
+                # Show validation warnings if needed
+                d_eff = kpis['Statistical Properties']['D-Efficiency (%)']
+                if d_eff < 60:
+                    st.warning("⚠️ D-Efficiency is below 60%. Consider increasing the number of cards for better statistical power.")
+                elif d_eff >= 70:
+                    st.success("✅ Excellent D-Efficiency! This design provides strong statistical power.")
             
             with tab2:
                 st.subheader("🎴 Experimental Design Cards")
@@ -276,19 +308,37 @@ def main():
                     st.subheader("📊 Cards per Block")
                     block_counts = design_df['Block'].value_counts().sort_index()
                     st.bar_chart(block_counts)
+                
+                # Show attribute balance
+                st.subheader("🎯 Attribute Level Balance")
+                for attr in [f'Attr{i+1}' for i in range(num_attributes)]:
+                    if attr in design_df.columns:
+                        counts = design_df[attr].value_counts().sort_index()
+                        st.write(f"**{attr}:** {dict(counts)}")
             
             with tab3:
                 st.subheader("📥 Download Options")
                 
-                # Excel download
+                # Excel download with multiple sheets
                 excel_buffer = io.BytesIO()
                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    design_df.to_excel(writer, sheet_name='Design', index=False)
+                    design_df.to_excel(writer, sheet_name='Design_Cards', index=False)
+                    
+                    # Summary sheet
+                    summary_data = []
+                    for category, items in kpis.items():
+                        if category != 'Approach' and isinstance(items, dict):
+                            for key, value in items.items():
+                                summary_data.append([category, key, value])
+                    
+                    if summary_data:
+                        summary_df = pd.DataFrame(summary_data, columns=['Category', 'Metric', 'Value'])
+                        summary_df.to_excel(writer, sheet_name='Summary', index=False)
                 
                 st.download_button(
-                    label="📊 Download Excel File",
+                    label="📊 Download Complete Excel File",
                     data=excel_buffer.getvalue(),
-                    file_name="experimental_design.xlsx",
+                    file_name="experimental_design_complete.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
@@ -300,11 +350,19 @@ def main():
                     file_name="experimental_design.csv",
                     mime="text/csv"
                 )
+        else:
+            st.error("❌ Failed to generate design. Please check your parameters and try again.")
     
     # Footer
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ About")
-    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis. Cards are automatically calculated to ensure statistical validity.")
+    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis and demand estimation studies using advanced statistical methods.")
+    st.sidebar.markdown("**Features:**")
+    st.sidebar.markdown("• Automatic or manual card calculation")
+    st.sidebar.markdown("• D-efficiency optimization")
+    st.sidebar.markdown("• Balanced block designs")
+    st.sidebar.markdown("• Multiple download formats")
 
 if __name__ == '__main__':
     main()
+
