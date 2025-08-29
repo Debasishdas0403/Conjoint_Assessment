@@ -1,374 +1,375 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from advanced_utils import AdvancedConjointAnalyzer
+from scipy.linalg import det
+import io
 
-# Page configuration
-st.set_page_config(
-    page_title="Conjoint Analysis Tool",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+def effects_coding(levels_count, design_column):
+    """Convert categorical levels to effects coding for design matrix"""
+    n = len(design_column)
+    coded = np.zeros((n, levels_count - 1))
+    for i in range(levels_count - 1):
+        coded[:, i] = np.where(design_column == (i + 1), 1, 0)
+    if levels_count > 1:
+        coded[:, -1] = -np.sum(coded[:, :-1], axis=1)
+    return coded
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 0.375rem;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        border: 1px solid #ffeaa7;
-        border-radius: 0.375rem;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-if 'attributes' not in st.session_state:
-    st.session_state.attributes = {}
-if 'analyzer' not in st.session_state:
-    st.session_state.analyzer = AdvancedConjointAnalyzer()
-
-def main():
-    st.markdown('<h1 class="main-header">📊 Advanced Conjoint Analysis Tool</h1>', unsafe_allow_html=True)
-    st.markdown("**Optimize your conjoint study design with statistical precision**")
-    
-    # Sidebar
-    st.sidebar.title("🎯 Study Configuration")
-    
-    # Attributes section
-    st.sidebar.subheader("📝 Attributes & Levels")
-    
-    with st.sidebar.form("add_attribute_form"):
-        attr_name = st.text_input("Attribute Name", placeholder="e.g., Price, Brand")
-        attr_levels = st.text_area(
-            "Levels (one per line)", 
-            placeholder="e.g.,\n\$10\n\$15\n\$20",
-            height=80
-        )
+def calculate_d_efficiency(df, attributes, levels):
+    """Calculate D-efficiency of the experimental design"""
+    try:
+        design_matrix_parts = []
+        for attr in attributes:
+            levels_count = len(levels[attr])
+            col = df[attr].values
+            coded_part = effects_coding(levels_count, col)
+            design_matrix_parts.append(coded_part)
         
-        add_attr = st.form_submit_button("➕ Add Attribute")
+        X = np.hstack(design_matrix_parts)
+        XTX = np.dot(X.T, X)
+        p = X.shape[1]
+        N = X.shape[0]
         
-        if add_attr:
-            if attr_name and attr_levels:
-                levels = [level.strip() for level in attr_levels.split('\n') if level.strip()]
-                if len(levels) >= 2:
-                    st.session_state.attributes[attr_name] = levels
-                    st.success(f"Added '{attr_name}' with {len(levels)} levels")
-                    st.rerun()
-                else:
-                    st.error("Please provide at least 2 levels")
-            else:
-                st.error("Please provide both attribute name and levels")
-    
-    # Display current attributes
-    if st.session_state.attributes:
-        st.sidebar.subheader("📋 Current Attributes")
-        for attr_name, levels in st.session_state.attributes.items():
-            with st.sidebar.expander(f"**{attr_name}** ({len(levels)} levels)"):
-                for i, level in enumerate(levels, 1):
-                    st.write(f"{i}. {level}")
-                
-                if st.button(f"🗑️ Remove {attr_name}", key=f"remove_{attr_name}"):
-                    del st.session_state.attributes[attr_name]
-                    st.rerun()
-    
-    # Survey parameters
-    st.sidebar.subheader("📊 Survey Parameters")
-    n_respondents = st.sidebar.number_input("Number of Respondents", min_value=10, max_value=1000, value=100)
-    n_alternatives = st.sidebar.selectbox("Alternatives per Question", [2, 3, 4], index=0)
-    target_efficiency = st.sidebar.slider("Target D-Efficiency", 0.5, 1.0, 0.8, 0.05)
-    
-    # Main content
-    if not st.session_state.attributes:
-        st.info("👆 Please add attributes and levels using the sidebar to get started!")
-        return
-    
-    # Study summary
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Attributes", len(st.session_state.attributes))
-    
-    with col2:
-        total_levels = sum(len(levels) for levels in st.session_state.attributes.values())
-        st.metric("Total Levels", total_levels)
-    
-    with col3:
-        num_params = sum(len(levels) - 1 for levels in st.session_state.attributes.values()) + 1
-        st.metric("Parameters", num_params)
-    
-    with col4:
-        full_factorial = np.prod([len(levels) for levels in st.session_state.attributes.values()])
-        st.metric("Full Factorial", f"{full_factorial:,}")
-    
-    # Analysis button
-    if st.button("🚀 Run Advanced Analysis", type="primary", use_container_width=True):
-        run_analysis(n_respondents, n_alternatives, target_efficiency, num_params)
-
-def run_analysis(n_respondents, n_alternatives, target_efficiency, num_params):
-    """Run the complete conjoint analysis"""
-    
-    with st.spinner("🔄 Running advanced D-efficiency optimization..."):
-        
-        analyzer = st.session_state.analyzer
-        
-        # Find optimal design
-        results_df, theoretical_min, max_questions_tested = analyzer.find_optimal_questions_advanced(
-            st.session_state.attributes, 
-            n_respondents, 
-            target_efficiency
-        )
-        
-        # Store results
-        st.session_state.results = results_df
-        st.session_state.theoretical_min = theoretical_min
-        st.session_state.max_questions_tested = max_questions_tested
-        st.session_state.num_params = num_params
-    
-    # Display results
-    display_results(results_df, theoretical_min, target_efficiency, n_respondents)
-
-def display_results(results_df, theoretical_min, target_efficiency, n_respondents):
-    """Display comprehensive analysis results"""
-    
-    st.markdown("---")
-    st.subheader("🎯 Analysis Results")
-    
-    # Create tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Efficiency Chart", "📊 Detailed Results", "🎯 Recommendations", "📋 Design Summary"])
-    
-    with tab1:
-        display_efficiency_chart(results_df, theoretical_min, target_efficiency)
-    
-    with tab2:
-        display_detailed_results(results_df, target_efficiency, n_respondents, theoretical_min)
-    
-    with tab3:
-        display_recommendations(results_df, target_efficiency, theoretical_min)
-    
-    with tab4:
-        display_design_summary()
-
-def display_efficiency_chart(results_df, theoretical_min, target_efficiency):
-    """Display the main efficiency chart"""
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Main efficiency plot
-        fig = go.Figure()
-        
-        # D-efficiency line
-        fig.add_trace(go.Scatter(
-            x=results_df['num_questions'],
-            y=results_df['d_efficiency'],
-            mode='lines+markers',
-            name='D-Efficiency',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=8)
-        ))
-        
-        # Target line
-        fig.add_hline(
-            y=target_efficiency, 
-            line_dash="dash", 
-            line_color="red",
-            annotation_text=f"Target: {target_efficiency}"
-        )
-        
-        # Theoretical minimum vertical line
-        fig.add_vline(
-            x=theoretical_min,
-            line_dash="dot",
-            line_color="orange",
-            annotation_text=f"Theoretical Min: {theoretical_min}"
-        )
-        
-        # Highlight optimal point
-        meets_target = results_df[results_df['d_efficiency'] >= target_efficiency]
-        if not meets_target.empty:
-            optimal_row = meets_target.iloc[0]
-            fig.add_trace(go.Scatter(
-                x=[optimal_row['num_questions']],
-                y=[optimal_row['d_efficiency']],
-                mode='markers',
-                name='Optimal Design',
-                marker=dict(size=15, color='red', symbol='star')
-            ))
-        
-        fig.update_layout(
-            title="D-Efficiency vs Number of Questions per Respondent",
-            xaxis_title="Number of Questions per Respondent",
-            yaxis_title="D-Efficiency",
-            height=500,
-            showlegend=True
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.subheader("🎯 Key Findings")
-        
-        if not meets_target.empty:
-            optimal = meets_target.iloc[0]
-            st.success("✅ Target achieved!")
-            st.metric("Optimal Questions", int(optimal['num_questions']))
-            st.metric("D-Efficiency", f"{optimal['d_efficiency']:.3f}")
-            st.metric("Total Observations", f"{optimal['total_runs']:,}")
+        det_XTX = det(XTX)
+        if det_XTX <= 0:
+            return 0
         else:
-            max_eff_row = results_df.loc[results_df['d_efficiency'].idxmax()]
-            st.warning("⚠️ Target not achieved")
-            st.metric("Best Questions", int(max_eff_row['num_questions']))
-            st.metric("Max D-Efficiency", f"{max_eff_row['d_efficiency']:.3f}")
-            st.info(f"Consider increasing questions beyond {results_df['num_questions'].max()}")
+            return (det_XTX ** (1 / p)) / N
+    except (np.linalg.LinAlgError, ValueError):
+        return 0
 
-def display_detailed_results(results_df, target_efficiency, n_respondents, theoretical_min):
-    """Display detailed results table"""
+def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far=0):
+    """Generate a balanced block with equal level distribution"""
+    np.random.seed(42 + block_num)  # Reproducible but different per block
     
-    # Prepare display dataframe
-    display_df = results_df.copy()
-    display_df['Status'] = ''
+    block_data = {}
+    block_data['Block'] = [block_num] * block_size
+    block_data['Card Number'] = [cards_so_far + i + 1 for i in range(block_size)]
+    block_data['Brand'] = ['New Brand'] * block_size
     
-    # Add status indicators
-    optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
-    if not optimal_questions.empty:
-        optimal_min = optimal_questions['num_questions'].min()
-        display_df.loc[display_df['num_questions'] == optimal_min, 'Status'] = '🎯 OPTIMAL'
+    for attr in attributes:
+        attr_levels = levels[attr]
+        num_levels = len(attr_levels)
+        
+        # Calculate balanced distribution
+        repeats = block_size // num_levels
+        remainder = block_size % num_levels
+        
+        levels_list = []
+        for i, level in enumerate(attr_levels):
+            count = repeats + (1 if i < remainder else 0)
+            levels_list.extend([level] * count)
+        
+        np.random.shuffle(levels_list)
+        block_data[attr] = levels_list
     
-    display_df.loc[display_df['num_questions'] == theoretical_min, 'Status'] += ' 📏 THEORETICAL'
-    display_df.loc[display_df['d_efficiency'] >= target_efficiency, 'Status'] += ' ✅ MEETS TARGET'
-    
-    # Format columns
-    display_df['d_efficiency'] = display_df['d_efficiency'].round(4)
-    display_df['d_error'] = display_df['d_error'].round(4)
-    display_df['avg_std_error'] = display_df['avg_std_error'].round(4)
-    display_df['obs_per_param'] = display_df['obs_per_param'].round(1)
-    
-    # Reorder columns
-    columns = ['num_questions', 'Status', 'total_runs', 'd_efficiency', 'd_error', 'avg_std_error', 'obs_per_param']
-    display_df = display_df[columns]
-    
-    # Style the dataframe
-    def highlight_optimal(s):
-        return ['background-color: lightgreen' if '🎯 OPTIMAL' in str(val) else '' for val in s]
-    
-    st.dataframe(
-        display_df.style.apply(highlight_optimal, subset=['Status']),
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # Download button
-    csv = display_df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download Results as CSV",
-        data=csv,
-        file_name="conjoint_efficiency_results.csv",
-        mime="text/csv"
-    )
+    return pd.DataFrame(block_data)
 
-def display_recommendations(results_df, target_efficiency, theoretical_min):
-    """Display actionable recommendations"""
+def calculate_balance_metrics(df, attributes, levels):
+    """Calculate balance metrics for the design"""
+    balance_metrics = {}
     
-    optimal_questions = results_df[results_df['d_efficiency'] >= target_efficiency]
+    for attr in attributes:
+        attr_levels = levels[attr]
+        counts = df[attr].value_counts()
+        
+        # Calculate coefficient of variation for balance
+        mean_count = len(df) / len(attr_levels)
+        std_count = counts.std()
+        cv = (std_count / mean_count) * 100 if mean_count > 0 else 0
+        
+        balance_metrics[attr] = {
+            'Mean Count': mean_count,
+            'Std Dev': std_count,
+            'CV (%)': round(cv, 2),
+            'Min Count': counts.min(),
+            'Max Count': counts.max()
+        }
     
-    if not optimal_questions.empty:
-        optimal = optimal_questions.iloc[0]
-        
-        st.markdown(f"""
-        <div class="success-box">
-            <h3>✅ Recommended Design</h3>
-            <p><strong>Use {int(optimal['num_questions'])} questions per respondent</strong></p>
-            <ul>
-                <li>Achieves D-efficiency of {optimal['d_efficiency']:.3f}</li>
-                <li>Total observations: {optimal['total_runs']:,}</li>
-                <li>Observations per parameter: {optimal['obs_per_param']:.1f}</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        
+    return balance_metrics
+
+def generate_design(num_attributes, levels_per_attribute, num_cards, blocking, n_blocks):
+    """Generate complete experimental design"""
+    # Validate inputs
+    if len(levels_per_attribute) != num_attributes:
+        st.error(f"Please enter exactly {num_attributes} level values")
+        return None, None
+    
+    # Create attributes and levels
+    attributes = [f'Attr{i+1}' for i in range(num_attributes)]
+    levels = {f'Attr{i+1}': list(range(1, l+1)) for i, l in enumerate(levels_per_attribute)}
+    
+    # Determine design structure
+    if blocking:
+        cards_per_block = num_cards // n_blocks
+        remainder_cards = num_cards % n_blocks
     else:
-        max_eff_row = results_df.loc[results_df['d_efficiency'].idxmax()]
-        
-        st.markdown(f"""
-        <div class="warning-box">
-            <h3>⚠️ Target Not Achieved</h3>
-            <p><strong>Best option: {int(max_eff_row['num_questions'])} questions</strong></p>
-            <p>Maximum D-efficiency: {max_eff_row['d_efficiency']:.3f}</p>
-            
-            <h4>Options to improve efficiency:</h4>
-            <ol>
-                <li>Increase number of questions beyond {results_df['num_questions'].max()}</li>
-                <li>Increase number of respondents</li>
-                <li>Reduce number of attribute levels</li>
-                <li>Accept lower target efficiency</li>
-            </ol>
-        </div>
-        """, unsafe_allow_html=True)
+        cards_per_block = num_cards
+        n_blocks = 1
+        remainder_cards = 0
     
-    # Efficiency trend analysis
-    st.subheader("📊 Efficiency Trend Analysis")
+    # Generate blocks
+    block_dfs = []
+    cards_so_far = 0
     
-    col1, col2 = st.columns(2)
+    for block_num in range(1, n_blocks + 1):
+        # Add remainder cards to last blocks
+        block_size = cards_per_block + (1 if block_num > (n_blocks - remainder_cards) else 0)
+        
+        df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
+        block_dfs.append(df_block)
+        cards_so_far += block_size
     
-    with col1:
-        # Marginal gains
-        results_df['marginal_gain'] = results_df['d_efficiency'].diff()
-        
-        fig_marginal = go.Figure()
-        fig_marginal.add_trace(go.Bar(
-            x=results_df['num_questions'][1:],
-            y=results_df['marginal_gain'][1:],
-            name='Marginal D-Efficiency Gain'
-        ))
-        
-        fig_marginal.update_layout(
-            title="Marginal Efficiency Gains",
-            xaxis_title="Questions per Respondent",
-            yaxis_title="Marginal Gain",
-            height=300
-        )
-        
-        st.plotly_chart(fig_marginal, use_container_width=True)
+    # Combine all blocks
+    design_df = pd.concat(block_dfs, ignore_index=True)
     
-    with col2:
-        # Cost-benefit analysis
-        results_df['cost_benefit'] = results_df['d_efficiency'] / results_df['num_questions']
-        
-        fig_cb = go.Figure()
-        fig_cb.add_trace(go.Scatter(
-            x=results_df['num_questions'],
-            y=results_df['cost_benefit'],
-            mode='lines+markers',
-            name='Efficiency per Question'
-        ))
-        
-        fig_cb.update_layout(
-            title="Efficiency per Question (Cost-Benefit)",
-            xaxis_title="Questions per Respondent",
-            yaxis_title="D-Efficiency / Questions",
-            height=300
-        )
-        
-        st.plotly_chart(fig_cb, use_container_width=True)
+    # Calculate metrics
+    d_eff = calculate_d_efficiency(design_df, attributes, levels)
+    balance_metrics = calculate_balance_metrics(design_df, attributes, levels)
+    
+    # Create approach description
+    approach = "**Design Approach:** Balanced Incomplete Block Design (BIBD)\n\n"
+    approach += "**Method:** Equal count distribution within blocks\n\n"
+    if blocking:
+        approach += f"**Structure:** {n_blocks} blocks with {cards_per_block}"
+        if remainder_cards > 0:
+            approach += f"-{cards_per_block + 1}"
+        approach += " cards each"
+    else:
+        approach += "**Structure:** Single block (no blocking)"
+    
+    # Compile KPIs
+    kpis = {
+        'Design Structure': {
+            'Total Cards': len(design_df),
+            'Number of Attributes': num_attributes,
+            'Levels per Attribute': levels_per_attribute,
+            'Blocking': 'Yes' if blocking else 'No',
+            'Number of Blocks': n_blocks,
+            'Cards per Block': f"{cards_per_block}" + (f"-{cards_per_block + 1}" if remainder_cards > 0 else "")
+        },
+        'Statistical Properties': {
+            'D-Efficiency (%)': round(d_eff * 100, 2),
+            'Design Type': 'Fractional Factorial' if len(design_df) < np.prod(levels_per_attribute) else 'Full Factorial',
+            'Parameters Estimated': sum(l - 1 for l in levels_per_attribute),
+            'Degrees of Freedom': len(design_df) - sum(l - 1 for l in levels_per_attribute) - 1
+        },
+        'Balance Metrics': balance_metrics,
+        'Approach': approach
+    }
+    
+    return design_df, kpis
 
-def display_design_summary():
-    """Display comprehensive design summary"""
+def create_summary_report(design_df, kpis):
+    """Create downloadable summary report"""
+    buffer = io.StringIO()
+    
+    buffer.write("EXPERIMENTAL DESIGN SUMMARY REPORT\n")
+    buffer.write("=" * 50 + "\n\n")
+    
+    # Design Structure
+    buffer.write("DESIGN STRUCTURE\n")
+    buffer.write("-" * 20 + "\n")
+    for key, value in kpis['Design Structure'].items():
+        buffer.write(f"{key}: {value}\n")
+    buffer.write("\n")
+    
+    # Statistical Properties  
+    buffer.write("STATISTICAL PROPERTIES\n")
+    buffer.write("-" * 25 + "\n")
+    for key, value in kpis['Statistical Properties'].items():
+        buffer.write(f"{key}: {value}\n")
+    buffer.write("\n")
+    
+    # Balance Metrics
+    buffer.write("ATTRIBUTE BALANCE METRICS\n")
+    buffer.write("-" * 30 + "\n")
+    for attr, metrics in kpis['Balance Metrics'].items():
+        buffer.write(f"\n{attr}:\n")
+        for metric, value in metrics.items():
+            buffer.write(f"  {metric}: {value}\n")
+    buffer.write("\n")
+    
+    # Approach
+    buffer.write("METHODOLOGY\n")
+    buffer.write("-" * 15 + "\n")
+    buffer.write(kpis['Approach'].replace('**', '').replace('\n\n', '\n'))
+    buffer.write("\n\n")
+    
+    # Design Preview
+    buffer.write("DESIGN PREVIEW (First 10 cards)\n")
+    buffer.write("-" * 35 + "\n")
+    buffer.write(design_df.head(10).to_string(index=False))
+    
+    return buffer.getvalue()
+
+# Streamlit App
+def main():
+    st.set_page_config(
+        page_title="Demand Estimation Design Generator",
+        page_icon="🎯",
+        layout="wide"
+    )
+    
+    st.title("🎯 Demand Estimation Experimental Design Generator")
+    st.markdown("Generate statistically optimized experimental designs for conjoint analysis and demand estimation studies.")
+    
+    # Sidebar for inputs
+    st.sidebar.header("📊 Design Parameters")
+    
+    # Input parameters
+    num_attributes = st.sidebar.number_input(
+        'Number of Attributes', 
+        min_value=2, max_value=15, value=6, 
+        help="Number of product attributes to include in the study"
+    )
+    
+    levels_input = st.sidebar.text_input(
+        f'Levels per Attribute (comma-separated)',
+        value='3,3,3,3,3,2',
+        help=f"Enter {num_attributes} numbers separated by commas (e.g., 3,3,2,4)"
+    )
+    
+    try:
+        levels_per_attribute = [int(x.strip()) for x in levels_input.split(',') if x.strip().isdigit()]
+    except:
+        levels_per_attribute = [3] * num_attributes
+    
+    num_cards = st.sidebar.number_input(
+        'Total Number of Cards', 
+        min_value=10, max_value=500, value=54,
+        help="Total number of experimental cards to generate"
+    )
+    
+    blocking_option = st.sidebar.selectbox(
+        'Enable Blocking?', 
+        ['No', 'Yes'],
+        help="Blocking reduces respondent burden by dividing cards into groups"
+    )
+    
+    if blocking_option == 'Yes':
+        n_blocks = st.sidebar.number_input(
+            'Number of Blocks', 
+            min_value=2, max_value=20, value=6,
+            help="Number of blocks to divide the cards into"
+        )
+    else:
+        n_blocks = 1
+    
+    # Generate button
+    if st.sidebar.button('🚀 Generate Design', type="primary"):
+        with st.spinner('Generating optimized experimental design...'):
+            design_df, kpis = generate_design(
+                num_attributes, levels_per_attribute, num_cards, 
+                blocking_option == 'Yes', n_blocks
+            )
+        
+        if design_df is not None:
+            # Display results in tabs
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 Design Summary", "🎴 Design Cards", "📊 Balance Analysis", "📥 Download"])
+            
+            with tab1:
+                st.subheader("📈 Design Summary")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### 🏗️ Design Structure")
+                    for key, value in kpis['Design Structure'].items():
+                        st.metric(key, value)
+                
+                with col2:
+                    st.markdown("### 📊 Statistical Properties")
+                    for key, value in kpis['Statistical Properties'].items():
+                        if key == 'D-Efficiency (%)':
+                            color = "normal" if value >= 70 else "inverse"
+                            st.metric(key, f"{value}%", delta=None)
+                        else:
+                            st.metric(key, value)
+                
+                st.markdown("### 🔬 Methodology")
+                st.markdown(kpis['Approach'])
+            
+            with tab2:
+                st.subheader("🎴 Experimental Design Cards")
+                st.dataframe(design_df, use_container_width=True)
+                
+                if blocking_option == 'Yes':
+                    st.subheader("📊 Cards per Block")
+                    block_counts = design_df['Block'].value_counts().sort_index()
+                    st.bar_chart(block_counts)
+            
+            with tab3:
+                st.subheader("📊 Attribute Balance Analysis")
+                
+                for attr, metrics in kpis['Balance Metrics'].items():
+                    with st.expander(f"{attr} Balance Metrics"):
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Mean Count", f"{metrics['Mean Count']:.1f}")
+                            st.metric("Std Dev", f"{metrics['Std Dev']:.2f}")
+                        with col2:
+                            st.metric("CV (%)", f"{metrics['CV (%)']}%")
+                            cv_status = "🟢 Excellent" if metrics['CV (%)'] < 10 else "🟡 Good" if metrics['CV (%)'] < 20 else "🟠 Fair"
+                            st.write(f"Balance: {cv_status}")
+                        with col3:
+                            st.metric("Min Count", metrics['Min Count'])
+                            st.metric("Max Count", metrics['Max Count'])
+                
+                # Overall balance visualization
+                st.subheader("🎯 Level Distribution by Attribute")
+                for attr in [f'Attr{i+1}' for i in range(num_attributes)]:
+                    if attr in design_df.columns:
+                        counts = design_df[attr].value_counts().sort_index()
+                        st.write(f"**{attr}:**")
+                        st.bar_chart(counts, height=200)
+            
+            with tab4:
+                st.subheader("📥 Download Options")
+                
+                # Excel download
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    design_df.to_excel(writer, sheet_name='Design', index=False)
+                    
+                    # Add summary sheet
+                    summary_data = []
+                    for category, items in kpis.items():
+                        if category != 'Approach' and isinstance(items, dict):
+                            for key, value in items.items():
+                                summary_data.append([category, key, value])
+                    
+                    summary_df = pd.DataFrame(summary_data, columns=['Category', 'Metric', 'Value'])
+                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                
+                st.download_button(
+                    label="📊 Download Excel File",
+                    data=excel_buffer.getvalue(),
+                    file_name="experimental_design.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+                # CSV download
+                csv = design_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📄 Download CSV File",
+                    data=csv,
+                    file_name="experimental_design.csv",
+                    mime="text/csv"
+                )
+                
+                # Summary report download
+                summary_report = create_summary_report(design_df, kpis)
+                st.download_button(
+                    label="📋 Download Summary Report",
+                    data=summary_report,
+                    file_name="design_summary_report.txt",
+                    mime="text/plain"
+                )
+    
+    # Footer
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ℹ️ About")
+    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis and demand estimation studies using advanced statistical methods.")
+
+if __name__ == '__main__':
+    main()
