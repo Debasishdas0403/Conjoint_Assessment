@@ -9,12 +9,9 @@ def effects_coding(levels_count, design_column):
     n = len(design_column)
     if levels_count <= 1:
         return np.zeros((n, 0))
-    
     coded = np.zeros((n, levels_count - 1))
     for i in range(levels_count - 1):
         coded[:, i] = np.where(design_column == (i + 1), 1, 0)
-    
-    # Last column is negative sum of others (effects coding constraint)
     coded[:, -1] = -np.sum(coded[:, :-1], axis=1)
     return coded
 
@@ -22,61 +19,45 @@ def calculate_d_efficiency(df, attributes, levels):
     """Calculate D-efficiency with improved error handling"""
     try:
         design_matrix_parts = []
-        
-        # Build design matrix using effects coding
         for attr in attributes:
             levels_count = len(levels[attr])
             col = df[attr].values
             coded_part = effects_coding(levels_count, col)
-            
-            if coded_part.shape[1] > 0:  # Only add if there are parameters to estimate
+            if coded_part.shape[1] > 0:
                 design_matrix_parts.append(coded_part)
-        
         if len(design_matrix_parts) == 0:
-            return 0.0
-        
-        # Combine all coded parts
+            return 0
         X = np.hstack(design_matrix_parts)
-        
-        # Check matrix rank for singularity
         rank = np.linalg.matrix_rank(X)
         if rank < X.shape[1]:
-            return 0.0  # Singular matrix, D-efficiency = 0
-        
-        # Calculate information matrix X'X
+            return 0  # Singular matrix
         XTX = np.dot(X.T, X)
-        p = X.shape[1]  # Number of parameters
-        N = X.shape[0]  # Number of observations
-        
-        # Calculate determinant
+        p = X.shape[1]
+        N = X.shape[0]
         det_XTX = det(XTX)
         if det_XTX <= 0:
-            return 0.0
-        
-        # D-efficiency formula: (|X'X|^(1/p)) / N
-        d_efficiency = (det_XTX ** (1 / p)) / N
-        return float(d_efficiency)
-        
-    except (np.linalg.LinAlgError, ValueError, TypeError) as e:
-        return 0.0
+            return 0
+        return (det_XTX ** (1 / p)) / N
+    except Exception as e:
+        return 0
 
 def calculate_optimal_cards(num_respondents, blocking, n_blocks, levels_per_attribute):
-    """Calculate optimal number of cards based on respondents and design constraints"""
-    
-    # Calculate total possible combinations
-    total_combinations = np.prod(levels_per_attribute)
+    """Calculate optimal number of cards ensuring sufficient observations for D-efficiency"""
+    # Minimum cards needed: 3x the number of parameters to estimate
+    min_cards_needed = sum(l - 1 for l in levels_per_attribute) * 3
     
     if blocking:
-        # For blocking: distribute respondents across blocks
-        respondents_per_block = num_respondents // n_blocks
-        cards_per_block = max(12, respondents_per_block)  # Minimum 12 cards per block for balance
+        # Ensure each block has minimum 15 cards or enough for parameters
+        min_cards_per_block = max(15, min_cards_needed // n_blocks)
+        cards_per_block = max(min_cards_per_block, num_respondents // n_blocks)
         total_cards = cards_per_block * n_blocks
     else:
-        # For no blocking: cards = respondents (each respondent gets unique cards)
-        total_cards = num_respondents
+        # For no blocking, ensure at least as many cards as respondents or minimum needed
+        total_cards = max(num_respondents, min_cards_needed)
         cards_per_block = total_cards
     
     # Don't exceed total possible combinations
+    total_combinations = np.prod(levels_per_attribute)
     total_cards = min(total_cards, total_combinations)
     
     return int(total_cards), int(cards_per_block)
@@ -111,8 +92,7 @@ def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_
     return pd.DataFrame(block_data)
 
 def generate_design(num_attributes, levels_per_attribute, num_respondents, blocking, n_blocks):
-    """Generate complete experimental design with backend card calculation"""
-    
+    """Generate complete experimental design with optimal card calculation"""
     # Validate inputs
     if len(levels_per_attribute) != num_attributes:
         st.error(f"Please enter exactly {num_attributes} level values")
@@ -122,12 +102,12 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
     attributes = [f'Attr{i+1}' for i in range(num_attributes)]
     levels = {f'Attr{i+1}': list(range(1, l+1)) for i, l in enumerate(levels_per_attribute)}
     
-    # Calculate optimal number of cards (backend calculation)
+    # Calculate optimal number of cards (THIS IS THE KEY FIX)
     total_cards, cards_per_block = calculate_optimal_cards(
         num_respondents, blocking, n_blocks, levels_per_attribute
     )
     
-    # Adjust blocks if not using blocking
+    # Adjust for non-blocking
     if not blocking:
         n_blocks = 1
         cards_per_block = total_cards
@@ -137,41 +117,32 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
     cards_so_far = 0
     
     for block_num in range(1, n_blocks + 1):
-        # Calculate block size (distribute any remainder cards across blocks)
+        # Calculate block size (last block gets remaining cards)
         if block_num == n_blocks:
-            block_size = total_cards - cards_so_far  # Last block gets remaining cards
+            block_size = total_cards - cards_per_block * (n_blocks - 1)
         else:
             block_size = cards_per_block
         
-        if block_size > 0:  # Only create block if it has cards
-            df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
-            block_dfs.append(df_block)
-            cards_so_far += block_size
+        df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
+        block_dfs.append(df_block)
+        cards_so_far += block_size
     
     # Combine all blocks
-    if block_dfs:
-        design_df = pd.concat(block_dfs, ignore_index=True)
-    else:
-        return None, None
+    design_df = pd.concat(block_dfs, ignore_index=True)
     
     # Calculate D-efficiency
     d_eff = calculate_d_efficiency(design_df, attributes, levels)
     
+    # Create approach description
+    approach = "**Design Approach:** Balanced equal level counts within blocks\\n"
+    if blocking:
+        approach += f"Number of Blocks: {n_blocks}\\n"
+    else:
+        approach += "Single Block (no blocking)\\n"
+    
     # Calculate additional metrics
     total_combinations = np.prod(levels_per_attribute)
-    design_type = "Fractional Factorial" if len(design_df) < total_combinations else "Full Factorial"
-    parameters_estimated = sum(l - 1 for l in levels_per_attribute)
-    
-    # Create approach description
-    approach = "**Design Approach:** Balanced Incomplete Block Design (BIBD)\\n\\n"
-    approach += "**Method:** Equal count distribution within blocks\\n"
-    
-    if blocking:
-        approach += f"**Structure:** {n_blocks} blocks with ~{cards_per_block} cards each\\n"
-        approach += f"**Respondents per block:** ~{num_respondents // n_blocks}"
-    else:
-        approach += "**Structure:** Single block (no blocking)\\n"
-        approach += f"**Cards per respondent:** {total_cards // num_respondents} on average"
+    design_efficiency = (len(design_df) / total_combinations) * 100
     
     # Compile KPIs
     kpis = {
@@ -183,14 +154,13 @@ def generate_design(num_attributes, levels_per_attribute, num_respondents, block
             'Number of Respondents': int(num_respondents),
             'Blocking Enabled': 'Yes' if blocking else 'No',
             'Number of Blocks': int(n_blocks),
-            'Cards per Block': f"~{cards_per_block}"
+            'Cards per Block': int(cards_per_block)
         },
         'Statistical Properties': {
             'D-Efficiency (%)': round(float(d_eff * 100), 2),
-            'Design Type': design_type,
-            'Parameters Estimated': int(parameters_estimated),
-            'Total Combinations': int(total_combinations),
-            'Design Efficiency': f"{round(len(design_df)/total_combinations*100, 1)}% of full factorial"
+            'Design Type': 'Fractional Factorial' if len(design_df) < total_combinations else 'Full Factorial',
+            'Parameters Estimated': int(sum(l - 1 for l in levels_per_attribute)),
+            'Design Efficiency': f"{round(design_efficiency, 1)}% of full factorial"
         },
         'Approach': approach
     }
@@ -334,7 +304,7 @@ def main():
     # Footer
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ About")
-    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis and demand estimation studies. Cards are automatically calculated based on respondents and blocking structure.")
+    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis. Cards are automatically calculated to ensure statistical validity.")
 
 if __name__ == '__main__':
     main()
