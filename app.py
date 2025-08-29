@@ -7,6 +7,9 @@ import io
 def effects_coding(levels_count, design_column):
     """Convert categorical levels to effects coding for design matrix"""
     n = len(design_column)
+    if levels_count <= 1:
+        return np.zeros((n, 0))
+    
     coded = np.zeros((n, levels_count - 1))
     for i in range(levels_count - 1):
         coded[:, i] = np.where(design_column == (i + 1), 1, 0)
@@ -20,22 +23,30 @@ def calculate_d_efficiency(df, attributes, levels):
         design_matrix_parts = []
         for attr in attributes:
             levels_count = len(levels[attr])
-            col = df[attr].values
-            coded_part = effects_coding(levels_count, col)
-            design_matrix_parts.append(coded_part)
+            if levels_count > 1:  # Only include if there are multiple levels
+                col = df[attr].values
+                coded_part = effects_coding(levels_count, col)
+                if coded_part.shape[1] > 0:  # Only add if there are columns
+                    design_matrix_parts.append(coded_part)
         
+        if not design_matrix_parts:
+            return 0.0
+            
         X = np.hstack(design_matrix_parts)
+        if X.shape[1] == 0:
+            return 0.0
+            
         XTX = np.dot(X.T, X)
         p = X.shape[1]
         N = X.shape[0]
         
         det_XTX = det(XTX)
         if det_XTX <= 0:
-            return 0
+            return 0.0
         else:
-            return (det_XTX ** (1 / p)) / N
-    except (np.linalg.LinAlgError, ValueError):
-        return 0
+            return float((det_XTX ** (1 / p)) / N)
+    except (np.linalg.LinAlgError, ValueError, TypeError):
+        return 0.0
 
 def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far=0):
     """Generate a balanced block with equal level distribution"""
@@ -74,15 +85,15 @@ def calculate_balance_metrics(df, attributes, levels):
         
         # Calculate coefficient of variation for balance
         mean_count = len(df) / len(attr_levels)
-        std_count = counts.std()
-        cv = (std_count / mean_count) * 100 if mean_count > 0 else 0
+        std_count = float(counts.std()) if len(counts) > 1 else 0.0
+        cv = (std_count / mean_count) * 100 if mean_count > 0 else 0.0
         
         balance_metrics[attr] = {
-            'Mean Count': mean_count,
-            'Std Dev': std_count,
+            'Mean Count': round(float(mean_count), 2),
+            'Std Dev': round(std_count, 2),
             'CV (%)': round(cv, 2),
-            'Min Count': counts.min(),
-            'Max Count': counts.max()
+            'Min Count': int(counts.min()),
+            'Max Count': int(counts.max())
         }
     
     return balance_metrics
@@ -137,21 +148,21 @@ def generate_design(num_attributes, levels_per_attribute, num_cards, blocking, n
     else:
         approach += "**Structure:** Single block (no blocking)"
     
-    # Compile KPIs
+    # Compile KPIs - ensure all values are serializable
     kpis = {
         'Design Structure': {
-            'Total Cards': len(design_df),
-            'Number of Attributes': num_attributes,
-            'Levels per Attribute': levels_per_attribute,
+            'Total Cards': int(len(design_df)),
+            'Number of Attributes': int(num_attributes),
+            'Levels per Attribute': str(levels_per_attribute),
             'Blocking': 'Yes' if blocking else 'No',
-            'Number of Blocks': n_blocks,
+            'Number of Blocks': int(n_blocks),
             'Cards per Block': f"{cards_per_block}" + (f"-{cards_per_block + 1}" if remainder_cards > 0 else "")
         },
         'Statistical Properties': {
-            'D-Efficiency (%)': round(d_eff * 100, 2),
+            'D-Efficiency (%)': round(float(d_eff * 100), 2),
             'Design Type': 'Fractional Factorial' if len(design_df) < np.prod(levels_per_attribute) else 'Full Factorial',
-            'Parameters Estimated': sum(l - 1 for l in levels_per_attribute),
-            'Degrees of Freedom': len(design_df) - sum(l - 1 for l in levels_per_attribute) - 1
+            'Parameters Estimated': int(sum(l - 1 for l in levels_per_attribute)),
+            'Degrees of Freedom': int(len(design_df) - sum(l - 1 for l in levels_per_attribute) - 1)
         },
         'Balance Metrics': balance_metrics,
         'Approach': approach
@@ -159,48 +170,16 @@ def generate_design(num_attributes, levels_per_attribute, num_cards, blocking, n
     
     return design_df, kpis
 
-def create_summary_report(design_df, kpis):
-    """Create downloadable summary report"""
-    buffer = io.StringIO()
-    
-    buffer.write("EXPERIMENTAL DESIGN SUMMARY REPORT\n")
-    buffer.write("=" * 50 + "\n\n")
-    
-    # Design Structure
-    buffer.write("DESIGN STRUCTURE\n")
-    buffer.write("-" * 20 + "\n")
-    for key, value in kpis['Design Structure'].items():
-        buffer.write(f"{key}: {value}\n")
-    buffer.write("\n")
-    
-    # Statistical Properties  
-    buffer.write("STATISTICAL PROPERTIES\n")
-    buffer.write("-" * 25 + "\n")
-    for key, value in kpis['Statistical Properties'].items():
-        buffer.write(f"{key}: {value}\n")
-    buffer.write("\n")
-    
-    # Balance Metrics
-    buffer.write("ATTRIBUTE BALANCE METRICS\n")
-    buffer.write("-" * 30 + "\n")
-    for attr, metrics in kpis['Balance Metrics'].items():
-        buffer.write(f"\n{attr}:\n")
-        for metric, value in metrics.items():
-            buffer.write(f"  {metric}: {value}\n")
-    buffer.write("\n")
-    
-    # Approach
-    buffer.write("METHODOLOGY\n")
-    buffer.write("-" * 15 + "\n")
-    buffer.write(kpis['Approach'].replace('**', '').replace('\n\n', '\n'))
-    buffer.write("\n\n")
-    
-    # Design Preview
-    buffer.write("DESIGN PREVIEW (First 10 cards)\n")
-    buffer.write("-" * 35 + "\n")
-    buffer.write(design_df.head(10).to_string(index=False))
-    
-    return buffer.getvalue()
+def safe_metric_display(key, value):
+    """Safely display metrics, handling different data types"""
+    if value is None:
+        return "N/A"
+    elif isinstance(value, (list, tuple)):
+        return str(value)
+    elif isinstance(value, dict):
+        return str(value)
+    else:
+        return str(value)
 
 # Streamlit App
 def main():
@@ -231,6 +210,9 @@ def main():
     
     try:
         levels_per_attribute = [int(x.strip()) for x in levels_input.split(',') if x.strip().isdigit()]
+        if len(levels_per_attribute) != num_attributes:
+            st.sidebar.error(f"Please enter exactly {num_attributes} values")
+            levels_per_attribute = [3] * num_attributes
     except:
         levels_per_attribute = [3] * num_attributes
     
@@ -258,12 +240,14 @@ def main():
     # Generate button
     if st.sidebar.button('🚀 Generate Design', type="primary"):
         with st.spinner('Generating optimized experimental design...'):
-            design_df, kpis = generate_design(
+            result = generate_design(
                 num_attributes, levels_per_attribute, num_cards, 
                 blocking_option == 'Yes', n_blocks
             )
         
-        if design_df is not None:
+        if result[0] is not None:
+            design_df, kpis = result
+            
             # Display results in tabs
             tab1, tab2, tab3, tab4 = st.tabs(["📈 Design Summary", "🎴 Design Cards", "📊 Balance Analysis", "📥 Download"])
             
@@ -275,16 +259,21 @@ def main():
                 with col1:
                     st.markdown("### 🏗️ Design Structure")
                     for key, value in kpis['Design Structure'].items():
-                        st.metric(key, value)
+                        display_value = safe_metric_display(key, value)
+                        st.metric(key, display_value)
                 
                 with col2:
                     st.markdown("### 📊 Statistical Properties")
                     for key, value in kpis['Statistical Properties'].items():
+                        display_value = safe_metric_display(key, value)
                         if key == 'D-Efficiency (%)':
-                            color = "normal" if value >= 70 else "inverse"
-                            st.metric(key, f"{value}%", delta=None)
+                            try:
+                                numeric_value = float(str(value).replace('%', ''))
+                                st.metric(key, f"{numeric_value}%")
+                            except (ValueError, TypeError):
+                                st.metric(key, display_value)
                         else:
-                            st.metric(key, value)
+                            st.metric(key, display_value)
                 
                 st.markdown("### 🔬 Methodology")
                 st.markdown(kpis['Approach'])
@@ -305,15 +294,15 @@ def main():
                     with st.expander(f"{attr} Balance Metrics"):
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Mean Count", f"{metrics['Mean Count']:.1f}")
-                            st.metric("Std Dev", f"{metrics['Std Dev']:.2f}")
+                            st.metric("Mean Count", f"{metrics['Mean Count']}")
+                            st.metric("Std Dev", f"{metrics['Std Dev']}")
                         with col2:
                             st.metric("CV (%)", f"{metrics['CV (%)']}%")
                             cv_status = "🟢 Excellent" if metrics['CV (%)'] < 10 else "🟡 Good" if metrics['CV (%)'] < 20 else "🟠 Fair"
                             st.write(f"Balance: {cv_status}")
                         with col3:
-                            st.metric("Min Count", metrics['Min Count'])
-                            st.metric("Max Count", metrics['Max Count'])
+                            st.metric("Min Count", str(metrics['Min Count']))
+                            st.metric("Max Count", str(metrics['Max Count']))
                 
                 # Overall balance visualization
                 st.subheader("🎯 Level Distribution by Attribute")
@@ -330,16 +319,6 @@ def main():
                 excel_buffer = io.BytesIO()
                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                     design_df.to_excel(writer, sheet_name='Design', index=False)
-                    
-                    # Add summary sheet
-                    summary_data = []
-                    for category, items in kpis.items():
-                        if category != 'Approach' and isinstance(items, dict):
-                            for key, value in items.items():
-                                summary_data.append([category, key, value])
-                    
-                    summary_df = pd.DataFrame(summary_data, columns=['Category', 'Metric', 'Value'])
-                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
                 
                 st.download_button(
                     label="📊 Download Excel File",
@@ -355,15 +334,6 @@ def main():
                     data=csv,
                     file_name="experimental_design.csv",
                     mime="text/csv"
-                )
-                
-                # Summary report download
-                summary_report = create_summary_report(design_df, kpis)
-                st.download_button(
-                    label="📋 Download Summary Report",
-                    data=summary_report,
-                    file_name="design_summary_report.txt",
-                    mime="text/plain"
                 )
     
     # Footer
