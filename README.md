@@ -1,16 +1,16 @@
-# Conjoint Demand Estimation Tool
+# Demand Estimation Experimental Design Generator
 
-A comprehensive Streamlit web application for designing and analyzing conjoint choice experiments with D-efficiency optimization and GPT-powered recommendations.
+A Streamlit application for generating statistically optimized experimental designs for conjoint analysis and demand estimation studies.
 
 ## Features
 
-- **Dynamic Attribute Definition**: Define any number of attributes with custom levels
-- **D-Efficiency Calculation**: Optimize survey design for statistical efficiency
-- **Interactive Visualizations**: Plotly charts for efficiency curves and results
-- **GPT Recommendations**: AI-powered insights for survey optimization
-- **Export Capabilities**: Download results and profiles as CSV files
-- **Responsive Design**: Works on desktop and mobile devices
+- **Flexible Design Parameters**: Configure number of attributes, levels, cards, and blocking
+- **Statistical Optimization**: Calculates D-efficiency and balance metrics
+- **Interactive Interface**: User-friendly web interface with real-time results
+- **Multiple Download Formats**: Excel, CSV, and summary reports
+- **Balanced Block Designs**: Equal level distribution within blocks
+- **Comprehensive Analytics**: Balance analysis and design diagnostics
 
 ## Installation
 
-1. Clone the repository:
+1. Clone this repository:
