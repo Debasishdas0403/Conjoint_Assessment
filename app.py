@@ -5,7 +5,7 @@ from scipy.linalg import det
 import io
 
 def effects_coding(levels_count, design_column):
-    """Convert categorical levels to effects coding for design matrix"""
+    """Convert categorical levels to effects coding"""
     n = len(design_column)
     if levels_count <= 1:
         return np.zeros((n, 0))
@@ -13,40 +13,73 @@ def effects_coding(levels_count, design_column):
     coded = np.zeros((n, levels_count - 1))
     for i in range(levels_count - 1):
         coded[:, i] = np.where(design_column == (i + 1), 1, 0)
-    if levels_count > 1:
-        coded[:, -1] = -np.sum(coded[:, :-1], axis=1)
+    
+    # Last column is negative sum of others (effects coding constraint)
+    coded[:, -1] = -np.sum(coded[:, :-1], axis=1)
     return coded
 
 def calculate_d_efficiency(df, attributes, levels):
-    """Calculate D-efficiency of the experimental design"""
+    """Calculate D-efficiency with improved error handling"""
     try:
         design_matrix_parts = []
+        
+        # Build design matrix using effects coding
         for attr in attributes:
             levels_count = len(levels[attr])
-            if levels_count > 1:  # Only include if there are multiple levels
-                col = df[attr].values
-                coded_part = effects_coding(levels_count, col)
-                if coded_part.shape[1] > 0:  # Only add if there are columns
-                    design_matrix_parts.append(coded_part)
-        
-        if not design_matrix_parts:
-            return 0.0
+            col = df[attr].values
+            coded_part = effects_coding(levels_count, col)
             
+            if coded_part.shape[1] > 0:  # Only add if there are parameters to estimate
+                design_matrix_parts.append(coded_part)
+        
+        if len(design_matrix_parts) == 0:
+            return 0.0
+        
+        # Combine all coded parts
         X = np.hstack(design_matrix_parts)
-        if X.shape[1] == 0:
-            return 0.0
-            
-        XTX = np.dot(X.T, X)
-        p = X.shape[1]
-        N = X.shape[0]
         
+        # Check matrix rank for singularity
+        rank = np.linalg.matrix_rank(X)
+        if rank < X.shape[1]:
+            return 0.0  # Singular matrix, D-efficiency = 0
+        
+        # Calculate information matrix X'X
+        XTX = np.dot(X.T, X)
+        p = X.shape[1]  # Number of parameters
+        N = X.shape[0]  # Number of observations
+        
+        # Calculate determinant
         det_XTX = det(XTX)
         if det_XTX <= 0:
             return 0.0
-        else:
-            return float((det_XTX ** (1 / p)) / N)
-    except (np.linalg.LinAlgError, ValueError, TypeError):
+        
+        # D-efficiency formula: (|X'X|^(1/p)) / N
+        d_efficiency = (det_XTX ** (1 / p)) / N
+        return float(d_efficiency)
+        
+    except (np.linalg.LinAlgError, ValueError, TypeError) as e:
         return 0.0
+
+def calculate_optimal_cards(num_respondents, blocking, n_blocks, levels_per_attribute):
+    """Calculate optimal number of cards based on respondents and design constraints"""
+    
+    # Calculate total possible combinations
+    total_combinations = np.prod(levels_per_attribute)
+    
+    if blocking:
+        # For blocking: distribute respondents across blocks
+        respondents_per_block = num_respondents // n_blocks
+        cards_per_block = max(12, respondents_per_block)  # Minimum 12 cards per block for balance
+        total_cards = cards_per_block * n_blocks
+    else:
+        # For no blocking: cards = respondents (each respondent gets unique cards)
+        total_cards = num_respondents
+        cards_per_block = total_cards
+    
+    # Don't exceed total possible combinations
+    total_cards = min(total_cards, total_combinations)
+    
+    return int(total_cards), int(cards_per_block)
 
 def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far=0):
     """Generate a balanced block with equal level distribution"""
@@ -57,11 +90,12 @@ def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_
     block_data['Card Number'] = [cards_so_far + i + 1 for i in range(block_size)]
     block_data['Brand'] = ['New Brand'] * block_size
     
+    # Generate balanced levels for each attribute
     for attr in attributes:
         attr_levels = levels[attr]
         num_levels = len(attr_levels)
         
-        # Calculate balanced distribution
+        # Calculate how many times each level should appear
         repeats = block_size // num_levels
         remainder = block_size % num_levels
         
@@ -70,116 +104,107 @@ def generate_balanced_block(block_num, block_size, attributes, levels, cards_so_
             count = repeats + (1 if i < remainder else 0)
             levels_list.extend([level] * count)
         
+        # Randomize order while maintaining balance
         np.random.shuffle(levels_list)
         block_data[attr] = levels_list
     
     return pd.DataFrame(block_data)
 
-def calculate_balance_metrics(df, attributes, levels):
-    """Calculate balance metrics for the design"""
-    balance_metrics = {}
+def generate_design(num_attributes, levels_per_attribute, num_respondents, blocking, n_blocks):
+    """Generate complete experimental design with backend card calculation"""
     
-    for attr in attributes:
-        attr_levels = levels[attr]
-        counts = df[attr].value_counts()
-        
-        # Calculate coefficient of variation for balance
-        mean_count = len(df) / len(attr_levels)
-        std_count = float(counts.std()) if len(counts) > 1 else 0.0
-        cv = (std_count / mean_count) * 100 if mean_count > 0 else 0.0
-        
-        balance_metrics[attr] = {
-            'Mean Count': round(float(mean_count), 2),
-            'Std Dev': round(std_count, 2),
-            'CV (%)': round(cv, 2),
-            'Min Count': int(counts.min()),
-            'Max Count': int(counts.max())
-        }
-    
-    return balance_metrics
-
-def generate_design(num_attributes, levels_per_attribute, num_cards, blocking, n_blocks):
-    """Generate complete experimental design"""
     # Validate inputs
     if len(levels_per_attribute) != num_attributes:
         st.error(f"Please enter exactly {num_attributes} level values")
         return None, None
     
-    # Create attributes and levels
+    # Create attributes and levels dictionary
     attributes = [f'Attr{i+1}' for i in range(num_attributes)]
     levels = {f'Attr{i+1}': list(range(1, l+1)) for i, l in enumerate(levels_per_attribute)}
     
-    # Determine design structure
-    if blocking:
-        cards_per_block = num_cards // n_blocks
-        remainder_cards = num_cards % n_blocks
-    else:
-        cards_per_block = num_cards
+    # Calculate optimal number of cards (backend calculation)
+    total_cards, cards_per_block = calculate_optimal_cards(
+        num_respondents, blocking, n_blocks, levels_per_attribute
+    )
+    
+    # Adjust blocks if not using blocking
+    if not blocking:
         n_blocks = 1
-        remainder_cards = 0
+        cards_per_block = total_cards
     
     # Generate blocks
     block_dfs = []
     cards_so_far = 0
     
     for block_num in range(1, n_blocks + 1):
-        # Add remainder cards to last blocks
-        block_size = cards_per_block + (1 if block_num > (n_blocks - remainder_cards) else 0)
+        # Calculate block size (distribute any remainder cards across blocks)
+        if block_num == n_blocks:
+            block_size = total_cards - cards_so_far  # Last block gets remaining cards
+        else:
+            block_size = cards_per_block
         
-        df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
-        block_dfs.append(df_block)
-        cards_so_far += block_size
+        if block_size > 0:  # Only create block if it has cards
+            df_block = generate_balanced_block(block_num, block_size, attributes, levels, cards_so_far)
+            block_dfs.append(df_block)
+            cards_so_far += block_size
     
     # Combine all blocks
-    design_df = pd.concat(block_dfs, ignore_index=True)
+    if block_dfs:
+        design_df = pd.concat(block_dfs, ignore_index=True)
+    else:
+        return None, None
     
-    # Calculate metrics
+    # Calculate D-efficiency
     d_eff = calculate_d_efficiency(design_df, attributes, levels)
-    balance_metrics = calculate_balance_metrics(design_df, attributes, levels)
+    
+    # Calculate additional metrics
+    total_combinations = np.prod(levels_per_attribute)
+    design_type = "Fractional Factorial" if len(design_df) < total_combinations else "Full Factorial"
+    parameters_estimated = sum(l - 1 for l in levels_per_attribute)
     
     # Create approach description
-    approach = "**Design Approach:** Balanced Incomplete Block Design (BIBD)\n\n"
-    approach += "**Method:** Equal count distribution within blocks\n\n"
-    if blocking:
-        approach += f"**Structure:** {n_blocks} blocks with {cards_per_block}"
-        if remainder_cards > 0:
-            approach += f"-{cards_per_block + 1}"
-        approach += " cards each"
-    else:
-        approach += "**Structure:** Single block (no blocking)"
+    approach = "**Design Approach:** Balanced Incomplete Block Design (BIBD)\\n\\n"
+    approach += "**Method:** Equal count distribution within blocks\\n"
     
-    # Compile KPIs - ensure all values are serializable
+    if blocking:
+        approach += f"**Structure:** {n_blocks} blocks with ~{cards_per_block} cards each\\n"
+        approach += f"**Respondents per block:** ~{num_respondents // n_blocks}"
+    else:
+        approach += "**Structure:** Single block (no blocking)\\n"
+        approach += f"**Cards per respondent:** {total_cards // num_respondents} on average"
+    
+    # Compile KPIs
     kpis = {
         'Design Structure': {
             'Total Cards': int(len(design_df)),
+            'Cards per Respondent': f"{len(design_df) // num_respondents}-{len(design_df) // num_respondents + 1}",
             'Number of Attributes': int(num_attributes),
             'Levels per Attribute': str(levels_per_attribute),
-            'Blocking': 'Yes' if blocking else 'No',
+            'Number of Respondents': int(num_respondents),
+            'Blocking Enabled': 'Yes' if blocking else 'No',
             'Number of Blocks': int(n_blocks),
-            'Cards per Block': f"{cards_per_block}" + (f"-{cards_per_block + 1}" if remainder_cards > 0 else "")
+            'Cards per Block': f"~{cards_per_block}"
         },
         'Statistical Properties': {
             'D-Efficiency (%)': round(float(d_eff * 100), 2),
-            'Design Type': 'Fractional Factorial' if len(design_df) < np.prod(levels_per_attribute) else 'Full Factorial',
-            'Parameters Estimated': int(sum(l - 1 for l in levels_per_attribute)),
-            'Degrees of Freedom': int(len(design_df) - sum(l - 1 for l in levels_per_attribute) - 1)
+            'Design Type': design_type,
+            'Parameters Estimated': int(parameters_estimated),
+            'Total Combinations': int(total_combinations),
+            'Design Efficiency': f"{round(len(design_df)/total_combinations*100, 1)}% of full factorial"
         },
-        'Balance Metrics': balance_metrics,
         'Approach': approach
     }
     
     return design_df, kpis
 
-def safe_metric_display(key, value):
-    """Safely display metrics, handling different data types"""
+def safe_metric_display(value):
+    """Safely display metrics"""
     if value is None:
         return "N/A"
-    elif isinstance(value, (list, tuple)):
+    try:
         return str(value)
-    elif isinstance(value, dict):
-        return str(value)
-    else:
-        return str(value)
+    except Exception:
+        return "Error"
 
 # Streamlit App
 def main():
@@ -216,10 +241,10 @@ def main():
     except:
         levels_per_attribute = [3] * num_attributes
     
-    num_cards = st.sidebar.number_input(
-        'Total Number of Cards', 
-        min_value=10, max_value=500, value=54,
-        help="Total number of experimental cards to generate"
+    num_respondents = st.sidebar.number_input(
+        'Number of Respondents', 
+        min_value=10, max_value=1000, value=100,
+        help="Total number of respondents for the study (cards will be calculated automatically)"
     )
     
     blocking_option = st.sidebar.selectbox(
@@ -241,7 +266,7 @@ def main():
     if st.sidebar.button('🚀 Generate Design', type="primary"):
         with st.spinner('Generating optimized experimental design...'):
             result = generate_design(
-                num_attributes, levels_per_attribute, num_cards, 
+                num_attributes, levels_per_attribute, num_respondents, 
                 blocking_option == 'Yes', n_blocks
             )
         
@@ -249,7 +274,7 @@ def main():
             design_df, kpis = result
             
             # Display results in tabs
-            tab1, tab2, tab3, tab4 = st.tabs(["📈 Design Summary", "🎴 Design Cards", "📊 Balance Analysis", "📥 Download"])
+            tab1, tab2, tab3 = st.tabs(["📈 Design Summary", "🎴 Design Cards", "📥 Download"])
             
             with tab1:
                 st.subheader("📈 Design Summary")
@@ -259,21 +284,16 @@ def main():
                 with col1:
                     st.markdown("### 🏗️ Design Structure")
                     for key, value in kpis['Design Structure'].items():
-                        display_value = safe_metric_display(key, value)
-                        st.metric(key, display_value)
+                        st.metric(key, safe_metric_display(value))
                 
                 with col2:
                     st.markdown("### 📊 Statistical Properties")
                     for key, value in kpis['Statistical Properties'].items():
-                        display_value = safe_metric_display(key, value)
                         if key == 'D-Efficiency (%)':
-                            try:
-                                numeric_value = float(str(value).replace('%', ''))
-                                st.metric(key, f"{numeric_value}%")
-                            except (ValueError, TypeError):
-                                st.metric(key, display_value)
+                            color = "normal" if value >= 70 else "inverse"
+                            st.metric(key, f"{value}%")
                         else:
-                            st.metric(key, display_value)
+                            st.metric(key, safe_metric_display(value))
                 
                 st.markdown("### 🔬 Methodology")
                 st.markdown(kpis['Approach'])
@@ -288,31 +308,6 @@ def main():
                     st.bar_chart(block_counts)
             
             with tab3:
-                st.subheader("📊 Attribute Balance Analysis")
-                
-                for attr, metrics in kpis['Balance Metrics'].items():
-                    with st.expander(f"{attr} Balance Metrics"):
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Mean Count", f"{metrics['Mean Count']}")
-                            st.metric("Std Dev", f"{metrics['Std Dev']}")
-                        with col2:
-                            st.metric("CV (%)", f"{metrics['CV (%)']}%")
-                            cv_status = "🟢 Excellent" if metrics['CV (%)'] < 10 else "🟡 Good" if metrics['CV (%)'] < 20 else "🟠 Fair"
-                            st.write(f"Balance: {cv_status}")
-                        with col3:
-                            st.metric("Min Count", str(metrics['Min Count']))
-                            st.metric("Max Count", str(metrics['Max Count']))
-                
-                # Overall balance visualization
-                st.subheader("🎯 Level Distribution by Attribute")
-                for attr in [f'Attr{i+1}' for i in range(num_attributes)]:
-                    if attr in design_df.columns:
-                        counts = design_df[attr].value_counts().sort_index()
-                        st.write(f"**{attr}:**")
-                        st.bar_chart(counts, height=200)
-            
-            with tab4:
                 st.subheader("📥 Download Options")
                 
                 # Excel download
@@ -339,7 +334,7 @@ def main():
     # Footer
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ About")
-    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis and demand estimation studies using advanced statistical methods.")
+    st.sidebar.markdown("This tool generates balanced experimental designs for conjoint analysis and demand estimation studies. Cards are automatically calculated based on respondents and blocking structure.")
 
 if __name__ == '__main__':
     main()
